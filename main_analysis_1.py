@@ -380,7 +380,7 @@ if not arcpy.Exists(fishpoints):
                                bilinear_interpolate_values="NONE")
 else:
     print('Extract fishnet cell number to points for {}...'.format(llhood))
-#####TO DEAL WITH###################################################################################################
+#####TO DEAL WITH##########################################################
     ExtractMultiValuesToPoints(in_point_features=fishpoints,
                                in_rasters= [[fishras, 'grid_code']],
                                bilinear_interpolate_values="NONE")
