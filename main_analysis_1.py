@@ -69,7 +69,7 @@ arcpy.CheckOutExtension("Spatial")
 analysis_years = ['2000', '2010', '2018'] #Years for analysis
 
 #### Directory structure ###
-rootdir = "D:\Users\odelgi\MSwork\Analysis_Chp1_2020"
+rootdir = os.path.dirname(os.path.abspath(__file__)).split('\\src')[0]
 datadir = os.path.join(rootdir, 'data')
 resdir = os.path.join(rootdir, 'results')
 
@@ -129,6 +129,7 @@ pathcheckcreate(basemapgdb)
 pelleUTM20S = os.path.join(basemapgdb, "Pellegri_department_outline_UTM20S")
 pelleras = os.path.join(basemapgdb,"Pellegri_department_UTM20S") #Reference raster for snapping throughout analysis
 pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
+fishpoints = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnetpoints')
 
 #Create dictionary that associates each year (key) with the path of the barrier layer for that year (value)
 barrier_cleancodedlist = {i: os.path.join(barrier_indir, 'Paths_{}_coded_clean_UTM20S'.format(i))
@@ -177,7 +178,7 @@ for year in landsat_years:
 
 
 ### Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat) ### 
-if not os.path.exists(pelleUTM20S):
+if not arcpy.Exists(pelleUTM20S):
     print('Projecting study area polygon...')
     arcpy.Project_management(in_dataset=pelleoutline,
                              out_dataset=pelleUTM20S,
@@ -331,165 +332,90 @@ del llhood
 
 ############################################## LOOP START ###############################################################
 #Iterate through the different livelihood names (as contained in the excel sheet)
-#for llhood in livelihoods:
-llhood = u'Bovine_livestock'
-print(llhood)
+livelihoods.remove('Combined_livelihood')
 
-bufferad = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
+for llhood in livelihoods:
+    #llhood = u'Bovine_livestock'
+    print(llhood)
 
-fishout = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet{}'.format(llhood))
-arcpy.env.outputCoordinateSystem = csref
+    bufferad = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
 
-if not arcpy.Exists(fishout):
-    print('Create fishnet for {}...'.format(llhood))
-    arcpy.CreateFishnet_management(out_feature_class = fishout,
-                                   origin_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMin),
-                                   y_axis_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMax),
-                                   cell_width = (bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
-                                   cell_height = (bufferad-bufferad%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
-                                   labels = 'NO_LABELS',
-                                   template = pelleextent_utm,
-                                   geometry_type = 'POLYGON')
+    fishout = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet{}'.format(llhood))
+    arcpy.env.outputCoordinateSystem = csref
 
-fishras = os.path.join(resdir, 'Analysis_Chp1_W1',
-                       'Buffers_W1.gdb',
-                       'fishnetras{}'.format(llhood))
+    if not arcpy.Exists(fishout):
+        print('Create fishnet for {}...'.format(llhood))
+        arcpy.CreateFishnet_management(out_feature_class = fishout,
+                                       origin_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMin),
+                                       y_axis_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMax),
+                                       cell_width = (bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
+                                       cell_height = (bufferad-bufferad%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
+                                       labels = 'NO_LABELS',
+                                       template = pelleextent_utm,
+                                       geometry_type = 'POLYGON')
 
-#Change raster tile size to make sure that cell IDs are ordered within a fishnet cell
-arcpy.env.tileSize = "{0} {0}".format(int(((bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
+    fishras = os.path.join(resdir, 'Analysis_Chp1_W1',
+                           'Buffers_W1.gdb',
+                           'fishnetras{}'.format(llhood))
 
-if not arcpy.Exists(fishras):
-    arcpy.env.extent = fishout
-    print('Converting fishnet to raster for {}...'.format(llhood))
-    arcpy.PolygonToRaster_conversion (in_features = fishout,
-                                      value_field = arcpy.Describe(fishout).OIDFieldName,
-                                      out_rasterdataset = fishras,
-                                      cell_assignment = 'CELL_CENTER',
-                                      cellsize = refraster)
+    #Change raster tile size to make sure that cell IDs are ordered within a fishnet cell
+    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
 
-fishpoints = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnetpoints')
-#Convert study area raster to point (one point for each cell)
-if not arcpy.Exists(fishpoints):
-    print('Converting fishnet raster back to points...')
-    arcpy.RasterToPoint_conversion(fishras, fishpoints, "Value")
+    if not arcpy.Exists(fishras):
+        arcpy.env.extent = fishout
+        print('Converting fishnet to raster for {}...'.format(llhood))
+        arcpy.PolygonToRaster_conversion (in_features = fishout,
+                                          value_field = arcpy.Describe(fishout).OIDFieldName,
+                                          out_rasterdataset = fishras,
+                                          cell_assignment = 'CELL_CENTER',
+                                          cellsize = refraster)
 
-    #Add new field to point layer whose value will be 0 if point falls within study area boundaries and <null> otherwise
-    print('Overlap points with Pellegrinni outline')
-    ExtractMultiValuesToPoints(in_point_features=fishpoints,
-                               in_rasters= [[pelleras, "pelleoverlap"]],
-                               bilinear_interpolate_values="NONE")
-else:
-    print('Extract fishnet cell number to points for {}...'.format(llhood))
-#####TO DEAL WITH##########################################################
-    ExtractMultiValuesToPoints(in_point_features=fishpoints,
-                               in_rasters= [[fishras, 'grid_code']],
-                               bilinear_interpolate_values="NONE")
+    #Convert study area raster to point (one point for each cell)
+    if not arcpy.Exists(fishpoints):
+        print('Converting fishnet raster back to points...')
+        arcpy.RasterToPoint_conversion(fishras, fishpoints, "Value")
 
-#Assign group to each point
-print('Compute point coordinates...')
-if not ('POINT_X' in [f.name for f in arcpy.ListFields(fishpoints)]):
-    arcpy.AddGeometryAttributes_management(Input_Features=fishpoints,
-                                           Geometry_Properties='POINT_X_Y_Z_M')
+        #Add new field to point layer whose value will be 0 if point falls within study area boundaries and <null> otherwise
+        print('Overlap points with Pellegrinni outline')
+        ExtractMultiValuesToPoints(in_point_features=fishpoints,
+                                   in_rasters= [[pelleras, "pelleoverlap"]],
+                                   bilinear_interpolate_values="NONE")
+    else:
+        print('Extract fishnet cell number to points for {}...'.format(llhood))
+        if 'grid_code' in [f.name for f in arcpy.ListFields(fishpoints)]:
+            arcpy.DeleteField_management(in_table = fishpoints, drop_field='grid_code')
+        ####################### TO DEAL WITH IT ######################################
+        ExtractMultiValuesToPoints(in_point_features=fishpoints,
+                                   in_rasters= [[fishras, 'grid_code']],
+                                   bilinear_interpolate_values="NONE")
 
-if not 'group{}'.format(llhood) in [f.name for f in arcpy.ListFields(fishpoints)]: #Check whether livelihood-specific grouping field already exists in fish points' attribute table
-    print('Assign non-overlapping group number to points for {}...'.format(llhood))
-    arcpy.AddField_management(in_table=fishpoints,
-                              field_name='group{}'.format(llhood),
-                              field_type='LONG')
-    groupdict = defaultdict(lambda: 1) #Create a dictionary for which key corresponds to the fishnet cell number and the default value is 1
-    with arcpy.da.UpdateCursor(in_table=fishpoints,
-                               field_names=['grid_code', 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
-                                sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
-        x=0
-        for row in cursor: #Iterate through points first column-wise, then row-wise
-            if x % 100000 == 0: #Homemade progress bar: print row number every 100,000th row
-                print(x)
-            row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'grid_code' in fishpoints)
-            groupdict[row[0]] +=1  #Add one to group value in dictionary for that fishnet cell (so that the next point that fall within that cell gets the same group number + 1)
-            cursor.updateRow(row) #Write value to table
-            x+=1
+    #Assign group to each point
+    print('Compute point coordinates...')
+    if not ('POINT_X' in [f.name for f in arcpy.ListFields(fishpoints)]):
+        arcpy.AddGeometryAttributes_management(Input_Features=fishpoints,
+                                               Geometry_Properties='POINT_X_Y_Z_M')
 
-arcpy.env.extent = pelleextent_utm
+    if not 'group{}'.format(llhood) in [f.name for f in arcpy.ListFields(fishpoints)]: #Check whether livelihood-specific grouping field already exists in fish points' attribute table
+        print('Assign non-overlapping group number to points for {}...'.format(llhood))
+        arcpy.AddField_management(in_table=fishpoints,
+                                  field_name='group{}'.format(llhood),
+                                  field_type='LONG')
+        groupdict = defaultdict(lambda: 1) #Create a dictionary for which key corresponds to the fishnet cell number and the default value is 1
+        with arcpy.da.UpdateCursor(in_table=fishpoints,
+                                   field_names=['grid_code', 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
+                                    sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
+            x=0
+            for row in cursor: #Iterate through points first column-wise, then row-wise
+                if x % 100000 == 0: #Homemade progress bar: print row number every 100,000th row
+                    print(x)
+                row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'grid_code' in fishpoints)
+                groupdict[row[0]] +=1  #Add one to group value in dictionary for that fishnet cell (so that the next point that fall within that cell gets the same group number + 1)
+                cursor.updateRow(row) #Write value to table
+                x+=1
+
+    arcpy.env.extent = pelleextent_utm
 
 #Subset points to only keep those that fall within the department of Pellegrini
 if not arcpy.Exists(pellepoints):
     arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr', where_clause='pelleoverlap = 0')
     arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class= pellepoints)
-
-    #Add index to speed up querying
-    arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood), index_name = 'group')
-
-#Iterate through each group of points, assigned to group based on livelihood buffer distance (speficied in fishnet)
-print('Iterating through each non-overlapping point group for {}...'.format(llhood))
-for fishgroup in range(1, max([row[0] for row in arcpy.da.SearchCursor(fishpoints, 'group{}'.format(llhood))])):
-    print('Processing group # {}...'.format(fishgroup))
-    tic = time.time()
-
-    #Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
-    arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints',
-                                      where_clause='{0} = {1}'.format('group{}'.format(llhood), fishgroup))
-
-    #Buffer subsetted points based on livelihood-specific buffer distance
-    arcpy.Buffer_analysis(in_features='subpoints',
-                          out_feature_class= r'in_memory/subbuffers',
-                          buffer_distance_or_field = bufferad,
-                          dissolve_option = 'NONE',
-                          method = 'PLANAR')
-
-    #Iterate through years of analysis
-    for year in analysis_years:
-        print(year)
-        #Compute cost distance and access
-        arcpy.env.mask = 'in_memory/subbuffers'
-        if llhood == 'Charcoal_production':
-            #forest resource weighting*(1/(1+cost))
-            accessras = Raster(forestyearly[year])* \
-                        (1/(1 + CostDistance(in_source_data = 'subpoints', in_cost_raster = barrierweight_outras[llhood+year])))
-        else:
-            #(1/(1+cost))
-            accessras = (1/(1 + CostDistance(in_source_data = 'subpoints', in_cost_raster = barrierweight_outras[llhood+year])))
-
-        #Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
-        #Compute mean access within livelihood-specific buffer and writes it out to table
-        zonaltab = ZonalStatisticsAsTable(in_zone_data='in_memory/subbuffers',
-                                          zone_field='pointid',
-                                          in_value_raster = accessras,
-                                          out_table = os.path.join(costtab_outgdb[llhood+year],
-                                                                   'CD_{0}_{1}_w1_{2}'.format(llhood, year, fishgroup)),
-                                          ignore_nodata = 'DATA',
-                                          statistics_type = 'MEAN')
-        toc = time.time()
-        print('Took {} s...'.format(toc-tic))
-
-# Process: Merge tables and join to points (within loop)
-for year in analysis_years:
-    print(year)
-    accessdict = {}
-    for dirpath, dirnames, filenames in arcpy.da.Walk(costtab_outgdb[llhood+year], datatype="Table"): #Retrieve the names of all tables in livelihood-specific access geodatabase
-        for tab in [os.path.join(dirpath, f) for f in filenames]:
-            print(tab)
-            for row in arcpy.da.SearchCursor(tab, ['pointid', 'MEAN']):
-                accessdict[row[0]] = row[1]
-
-    outfield = 'access{0}{1}'.format(llhood, year)
-    if not outfield in [f.name for f in arcpy.ListFields(pellepoints)]: #Make sure that livelihood specific access field doesn't already exist for that year in pellepoints
-        print('Create {} field'.format(outfield))
-        arcpy.AddField_management(in_table=pellepoints, field_name=outfield, field_type='FLOAT')
-
-        print('Write values out to point dataset...')
-        with arcpy.da.UpdateCursor(pellepoints, ['pointid', outfield]) as cursor:
-            x=0
-            for row in cursor:
-                if x % 100000 == 0:
-                    print(x)
-                try:
-                    row[1] = accessdict[row[0]]
-                except:
-                    print('pointid {} was not found in dictionary'.format(row[0]))
-                cursor.updateRow(row)
-                x+=1
-
-    #Convert points back to raster
-    arcpy.PointToRaster_conversion(in_features=pellepoints, value_field=outfield, cellsize=refraster,
-                                   out_rasterdataset= os.path.join(access_outgdb[llhood],
-                                                                   'accessras_W1_{0}{1}'.format(llhood, year)))
