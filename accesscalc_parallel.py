@@ -6,6 +6,7 @@ import re
 import pandas as pd
 import multiprocessing
 from functools import partial
+import traceback
 import cProfile
 
 arcpy.env.overwriteOutput = 'True'
@@ -15,15 +16,22 @@ arcpy.CheckOutExtension("Spatial")
 def accesscalc_grouped(infishgroup, inpoints, inllhood, inbuffer_radius, inyears, inbarrierweight_outras,
                        inforestyearly, incosttab_outgdb):
     print('Processing group # {}...'.format(infishgroup))
+
+    #tmpdir = os.path.join(os.path.dirname(incosttab_outgdb[inllhood+'2000']), 'tmp_{}'.format(str(infishgroup)))
+
+    #try:
+        #os.mkdir(tmpdir)
+    arcpy.env.scratchWorkspace = r"in_memory"  # Not having a separate scratch workspace can lead to bad locking issues
+
     tic = time.time()
 
     # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
-    arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='subpoints',
+    arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='subpoints{}'.format(infishgroup),
                                       where_clause='{0} = {1}'.format('group{}'.format(inllhood), infishgroup))
 
     # Buffer subsetted points based on livelihood-specific buffer distance
-    arcpy.Buffer_analysis(in_features='subpoints',
-                          out_feature_class=r'in_memory/subbuffers',
+    arcpy.Buffer_analysis(in_features='subpoints{}'.format(infishgroup),
+                          out_feature_class=r'in_memory/subbuffers{}'.format(infishgroup),
                           buffer_distance_or_field=inbuffer_radius,
                           dissolve_option='NONE',
                           method='PLANAR')
@@ -32,20 +40,20 @@ def accesscalc_grouped(infishgroup, inpoints, inllhood, inbuffer_radius, inyears
     for year in inyears:
         print(year)
         # Compute cost distance and access
-        arcpy.env.mask = 'in_memory/subbuffers'
+        arcpy.env.mask = 'in_memory/subbuffers{}'.format(infishgroup)
         if inllhood == 'Charcoal_production':
             # forest resource weighting*(1/(1+cost))
             accessras = Int(100 * Raster(inforestyearly[year]) * \
-                            (1 / (1 + CostDistance(in_source_data='subpoints',
+                            (1 / (1 + CostDistance(in_source_data='subpoints{}'.format(infishgroup),
                                                    in_cost_raster=inbarrierweight_outras[inllhood + year]))))
         else:
             # (1/(1+cost))
-            accessras = Int(100 * (1 / (1 + CostDistance(in_source_data='subpoints',
+            accessras = Int(100 * (1 / (1 + CostDistance(in_source_data='subpoints{}'.format(infishgroup),
                                                          in_cost_raster=inbarrierweight_outras[inllhood + year]))))
 
         # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
         # Compute mean access within livelihood-specific buffer and writes it out to table
-        ZonalStatisticsAsTable(in_zone_data='in_memory/subbuffers',
+        ZonalStatisticsAsTable(in_zone_data='in_memory/subbuffers{}'.format(infishgroup),
                                zone_field='pointid',
                                in_value_raster=accessras,
                                out_table=os.path.join(incosttab_outgdb[inllhood + year],
@@ -54,6 +62,17 @@ def accesscalc_grouped(infishgroup, inpoints, inllhood, inbuffer_radius, inyears
                                statistics_type='MEAN')
     toc = time.time()
     print('Took {} s...'.format(toc - tic))
+
+    #except Exception:
+    #    traceback.print_exc()
+        #arcpy.Delete_management(tmpdir)
+
+    #if arcpy.Exists(tmpdir):
+    #   arcpy.Delete_management(tmpdir)
+
+#accesscalc_grouped(infishgroup=90000, inpoints=pellepoints, inllhood=llhood, inbuffer_radius=bufferad,
+#                                             inyears=analysis_years, inbarrierweight_outras=barrierweight_outras,
+#                                             inforestyearly=forestyearly, incosttab_outgdb=costtab_outgdb)
 
 if __name__ == '__main__':
     #### Directory structure ###
@@ -154,57 +173,63 @@ if __name__ == '__main__':
     del year
 
     #
-    for llhood in livelihoods:
-        if not any([arcpy.Exists(layer) for layer in [access_outras[llhood + y] for y in analysis_years]]):
-            bufferad = float(weightingpd.loc[weightingpd[
-                                                 'Livelihood'] == llhood, 'Buffer_max_rad'])  # Get livelihood_specific buffer radius from table
+    #for llhood in livelihoods:
+    llhood = 'Bovine_livestock'
+    if not any([arcpy.Exists(layer) for layer in [access_outras[llhood + y] for y in analysis_years]]):
+        print('Processing {}...'.format(llhood))
+        bufferad = float(weightingpd.loc[weightingpd[
+                                             'Livelihood'] == llhood, 'Buffer_max_rad'])  # Get livelihood_specific buffer radius from table
+        print('Adding index to pellepoints...')
+        if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
             arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
                                       index_name='group{}'.format(llhood))  # Add index to speed up querying
 
-            ############# PARALLEL START ###################################################################################
-            print('Launch parallel processing')
-            tic = time.time()
-            fishgroups = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
-            p = multiprocessing.Pool(int(multiprocessing.cpu_count() * 0.75))
-            accesscalc_grouped_partial = partial(accesscalc_grouped,
-                                                 inpoints=pellepoints, inllhood=llhood, inbuffer_radius=bufferad,
-                                                 inyears=analysis_years, inbarrierweight_outras=barrierweight_outras,
-                                                 inforestyearly=forestyearly, incosttab_outgdb=costtab_outgdb)
-            p.map(accesscalc_grouped_partial, fishgroups)
-            p.close()
-            print(time.time() - tic)
-            ############# PARALLEL END #####################################################################################
+        print('Getting groups...')
+        fishgroups = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
-            # Process: Merge tables and join to points (within loop)
-            for year in analysis_years:
-                print(year)
-                accessdict = {}
-                for dirpath, dirnames, filenames in arcpy.da.Walk(costtab_outgdb[llhood + year],
-                                                                  datatype="Table"):  # Retrieve the names of all tables in livelihood-specific access geodatabase
-                    for tab in [os.path.join(dirpath, f) for f in filenames]:
-                        print(tab)
-                        for row in arcpy.da.SearchCursor(tab, ['pointid', 'MEAN']):
-                            accessdict[row[0]] = row[1]
+        ############# PARALLEL START ###################################################################################
+        print('Launch parallel processing')
+        tic = time.time()
+        p = multiprocessing.Pool(int(multiprocessing.cpu_count()))
+        accesscalc_grouped_partial = partial(accesscalc_grouped,
+                                             inpoints=pellepoints, inllhood=llhood, inbuffer_radius=bufferad,
+                                             inyears=analysis_years, inbarrierweight_outras=barrierweight_outras,
+                                             inforestyearly=forestyearly, incosttab_outgdb=costtab_outgdb)
+        p.map(accesscalc_grouped_partial, fishgroups)
+        p.close()
+        print(time.time() - tic)
+        ############# PARALLEL END #####################################################################################
 
-                outfield = 'access{0}{1}'.format(llhood, year)
-                if not outfield in [f.name for f in arcpy.ListFields(
-                        pellepoints)]:  # Make sure that livelihood specific access field doesn't already exist for that year in pellepoints
-                    print('Create {} field'.format(outfield))
-                    arcpy.AddField_management(in_table=pellepoints, field_name=outfield, field_type='FLOAT')
+        # Process: Merge tables and join to points (within loop)
+        for year in analysis_years:
+            print(year)
+            accessdict = {}
+            for dirpath, dirnames, filenames in arcpy.da.Walk(costtab_outgdb[llhood + year],
+                                                              datatype="Table"):  # Retrieve the names of all tables in livelihood-specific access geodatabase
+                for tab in [os.path.join(dirpath, f) for f in filenames]:
+                    print(tab)
+                    for row in arcpy.da.SearchCursor(tab, ['pointid', 'MEAN']):
+                        accessdict[row[0]] = row[1]
 
-                    print('Write values out to point dataset...')
-                    with arcpy.da.UpdateCursor(pellepoints, ['pointid', outfield]) as cursor:
-                        x = 0
-                        for row in cursor:
-                            if x % 100000 == 0:
-                                print(x)
-                            try:
-                                row[1] = accessdict[row[0]]
-                            except:
-                                print('pointid {} was not found in dictionary'.format(row[0]))
-                            cursor.updateRow(row)
-                            x += 1
+            outfield = 'access{0}{1}'.format(llhood, year)
+            if not outfield in [f.name for f in arcpy.ListFields(
+                    pellepoints)]:  # Make sure that livelihood specific access field doesn't already exist for that year in pellepoints
+                print('Create {} field'.format(outfield))
+                arcpy.AddField_management(in_table=pellepoints, field_name=outfield, field_type='FLOAT')
 
-                # Convert points back to raster
-                arcpy.PointToRaster_conversion(in_features=pellepoints, value_field=outfield, cellsize=refraster,
-                                               out_rasterdataset=access_outras)
+                print('Write values out to point dataset...')
+                with arcpy.da.UpdateCursor(pellepoints, ['pointid', outfield]) as cursor:
+                    x = 0
+                    for row in cursor:
+                        if x % 100000 == 0:
+                            print(x)
+                        try:
+                            row[1] = accessdict[row[0]]
+                        except:
+                            print('pointid {} was not found in dictionary'.format(row[0]))
+                        cursor.updateRow(row)
+                        x += 1
+
+            # Convert points back to raster
+            arcpy.PointToRaster_conversion(in_features=pellepoints, value_field=outfield, cellsize=refraster,
+                                           out_rasterdataset=access_outras)
