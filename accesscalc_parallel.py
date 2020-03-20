@@ -12,7 +12,6 @@ import cProfile
 arcpy.env.overwriteOutput = 'True'
 arcpy.CheckOutExtension("Spatial")
 
-
 def accesscalc_grouped(infishgroup, inpoints, inllhood, inbuffer_radius, inyears, inbarrierweight_outras,
                        inforestyearly, incosttab_outgdb):
     print('Processing group # {}...'.format(infishgroup))
@@ -25,14 +24,10 @@ def accesscalc_grouped(infishgroup, inpoints, inllhood, inbuffer_radius, inyears
 
     tic = time.time()
 
-    # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
-    arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='subpoints{}'.format(infishgroup),
-                                      where_clause='{0} = {1}'.format('group{}'.format(inllhood), infishgroup))
-
     # Buffer subsetted points based on livelihood-specific buffer distance
-    arcpy.Buffer_analysis(in_features='subpoints{}'.format(infishgroup),
-                          out_feature_class=r'in_memory/subbuffers{}'.format(infishgroup),
-                          buffer_distance_or_field=inbuffer_radius,
+    arcpy.Buffer_analysis(in_features='subpoints{}'.format(group),
+                          out_feature_class=os.path.join(groupdir, 'buffers.shp'),
+                          buffer_distance_or_field=bufferad,
                           dissolve_option='NONE',
                           method='PLANAR')
 

@@ -21,6 +21,7 @@ import pandas as pd #Module for manipulating tables (non-gis tables mostly) http
 from usgs import api #Module to grab landsat data
 from collections import defaultdict
 import time
+import geopandas
 
 #Functions
 def getfilelist(dir, repattern):
@@ -30,7 +31,7 @@ def getfilelist(dir, repattern):
             for (dirpath, dirnames, filenames) in os.walk(dir)
             for file in filenames if re.search(repattern, file)]
 
-def pathcheckcreate(path):
+def pathcheckcreate(path, verbose=True):
     """"Function that takes a path as input and:
       1. Checks which directories and .gdb exist in the path
       2. Creates the ones that don't exist"""
@@ -47,14 +48,16 @@ def pathcheckcreate(path):
     for dir in dirtocreate:
         #If gdb doesn't exist yet, use arcpy method to create it and then stop the loop to prevent from trying to create anything inside it
         if os.path.splitext(dir)[1] == '.gdb':
-            print('Create {}...'.format(dir))
+            if verbose:
+                print('Create {}...'.format(dir))
             arcpy.CreateFileGDB_management(out_folder_path=path,
                                            out_name=dir)
             break
 
         #Otherwise, if it is a directory name (no extension), make a new directory
         elif os.path.splitext(dir)[1] == '':
-            print('Create {}...'.format(dir))
+            if verbose:
+                print('Create {}...'.format(dir))
             path = os.path.join(path, dir)
             os.mkdir(path)
 
@@ -107,9 +110,13 @@ barrierweight_outdir = os.path.join(resdir,
                                     'Barrier_weighting_1_3030')
 pathcheckcreate(barrierweight_outdir)
 
-#Output buffer gdb
+#Output buffer and points gdbs
 llhoodbuffer_outdir = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb') #Output buffer path for each livelihood
 pathcheckcreate(llhoodbuffer_outdir) #Make sure that directories exist to write out buffers
+
+#Output director for HPC directories containing buffers and points to process through cost distance
+inputdir_HPC = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_HPC')
+pathcheckcreate(inputdir_HPC)
 
 #### Input variables #### 
 """Potential source of data: http://demo-ide.arsat.com.ar/ide-santiago/"""
@@ -273,7 +280,7 @@ weightingcodes = weightingmeta.loc[weightingmeta['Variable name'].str.contains("
 weightingpd = pd.read_excel(weighting_table, sheetname='Weighting_1')
 
 livelihoods = weightingpd['Livelihood'].tolist()
-
+livelihoods.remove('Combined_livelihood')
 
 barrierweight_outras = {} #Dictionary that will be populated with the path to the weighted barrier data for each livelihood-year combination
 #Iterate through the different livelihood names (as contained in the excel sheet)
@@ -310,7 +317,7 @@ for llhood in livelihoods:
             outreclas.save(barrierweight_outras[llhood+year])
 
 #------------------------------------------------------------------------------
-#Create cost distance rasters
+#Prepare data for generation of cost distance rasters
 
 #Create gdbs for cost raster
 costtab_outgdb = {}
@@ -330,16 +337,12 @@ for llhood in livelihoods:
     pathcheckcreate(access_outgdb[llhood])
 del llhood
 
-############################################## LOOP START ###############################################################
-#Iterate through the different livelihood names (as contained in the excel sheet)
-livelihoods.remove('Combined_livelihood')
-
+#LOOP: for each livelihood, assign pixels to groups so that can run non-overlapping cost distance within livelihood-specific buffer
+bufferad = {}
 for llhood in livelihoods:
     #llhood = u'Bovine_livestock'
     print(llhood)
-
-    bufferad = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
-
+    bufferad[llhood] = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
     fishout = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet{}'.format(llhood))
     arcpy.env.outputCoordinateSystem = csref
 
@@ -348,8 +351,8 @@ for llhood in livelihoods:
         arcpy.CreateFishnet_management(out_feature_class = fishout,
                                        origin_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMin),
                                        y_axis_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMax),
-                                       cell_width = (bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
-                                       cell_height = (bufferad-bufferad%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
+                                       cell_width = (bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
+                                       cell_height = (bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
                                        labels = 'NO_LABELS',
                                        template = pelleextent_utm,
                                        geometry_type = 'POLYGON')
@@ -359,7 +362,7 @@ for llhood in livelihoods:
                            'fishnetras{}'.format(llhood))
 
     #Change raster tile size to make sure that cell IDs are ordered within a fishnet cell
-    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
+    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
 
     if not arcpy.Exists(fishras):
         arcpy.env.extent = fishout
@@ -415,7 +418,64 @@ for llhood in livelihoods:
 
     arcpy.env.extent = pelleextent_utm
 
-#Subset points to only keep those that fall within the department of Pellegrini
+# Subset points to only keep those that fall within the department of Pellegrini
 if not arcpy.Exists(pellepoints):
-    arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr', where_clause='pelleoverlap = 0')
-    arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class= pellepoints)
+    arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr',
+                                      where_clause='pelleoverlap = 0')
+    arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class=pellepoints)
+
+
+# LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
+#for llhood in livelihoods:
+llhood = 'Charcoal_production'
+print('Creating points and buffers for {}...'.format(llhood))
+if not getfilelist(inputdir_HPC, '{}*'.format(llhood)):
+    print('Adding index to pellepoints...')
+    if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
+        arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
+                                  index_name='group{}'.format(llhood))  # Add index to speed up querying
+
+    print('Getting groups...')
+    fishgroups = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
+
+    print('Processing {} groups...'.format(len(fishgroups)))
+
+########################################### BENCHMARKING ###############################################################
+####---- Arcpy - Iterative point selection and shapefile writing: ~310 sec (Bovine, 1000 groups, ~12h total), ~441 sec (Charcoal, 1000 groups, ~ 123h total) ----####
+fishgroups = list(fishgroups)
+tic = time.time()
+for group in fishgroups[1:1000]:
+    if group % 100000 == 0:  # Homemade progress bar: print row number every 100,000th row
+        print(group)
+
+    outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, bufferad[llhood], group)
+    if not arcpy.Exists(outpoints):
+        # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
+        arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),
+                                          where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+        arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
+print(time.time() - tic)
+
+
+####---- Arcpy - Split by attributes: 209 seconds (Bovine, 1000 groups, ~10h total), (Charcoal, 1000 groups, ~2.6 days total) ----#####
+arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints',
+                                  where_clause='{0} < 1000'.format('group{}'.format(llhood))) #.format('group{}'.format(llhood), group))
+tic = time.time()
+arcpy.SplitByAttributes_analysis(Input_Table='subpoints',
+                                 Target_Workspace=inputdir_HPC,
+                                 Split_Fields='group{}'.format(llhood))
+print(time.time() - tic)
+
+###--- cursor + dictionary + cPickle--- deadly slow ###
+#groupdict = {row[0]:row[1] for row in arcpy.da.SearchCursor(pellepoints, ['group{}'.format(llhood), 'SHAPE@'])}
+
+###---- numpy array ----
+import numpy as np
+arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints',
+                                  where_clause='{0} < 1000'.format(
+                                      'group{}'.format(llhood)))  # .format('group{}'.format(llhood), group))
+grouparr = arcpy.da.FeatureClassToNumPyArray('subpoints', field_names=['group{}'.format(llhood), 'SHAPE@XY'])
+grouparrdict = {}
+[grouparrdict[labels == l] for l in np.unique(grouparr)]
+
+
