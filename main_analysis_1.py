@@ -21,6 +21,7 @@ import requests #Module to access URLs
 import pandas as pd #Module for manipulating tables (non-gis tables mostly) https://pandas.pydata.org/pandas-docs/stable/getting_started/overview.html
 from usgs import api #Module to grab landsat data
 from collections import defaultdict
+from collections import Counter
 import time
 import math
 from internal_functions import *
@@ -428,8 +429,11 @@ To do:
 """
 # LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
 
-#Add index to points and get list of groups
+### ------ Add index to points, get list of groups, and run analysis on 10 groups to check speed ----- ####
 fishgroups = defaultdict(set)
+testdir = pathcheckcreate(inputdir_HPC, 'testdir')
+grp_process_time = {}
+
 for llhood in livelihoods:
     # llhood = 'Charcoal_production'
     print('Creating points and buffers for {}...'.format(llhood))
@@ -442,115 +446,170 @@ for llhood in livelihoods:
         print('Getting groups...')
         fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
-        print('Processing {} groups...'.format(len(fishgroups[llhood])))
-
-for k, v in fishgroups.items():
-    print(k)
-    print(len(v))
-
-# Output points for 10 groups for each livelihood
-for llhood in livelihoods:
-    tic = time.time()
+    # Output points for 10 groups for each livelihood
     for group in list(fishgroups[llhood])[1:10]:
-        # if group % 100000 == 0:  # Homemade progress bar: print row number every 100,000th row
         print(group)
 
-        outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
+        outpoints = os.path.join(testdir, 'testpoints_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
         if not arcpy.Exists(outpoints):
             # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
             arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),
                                               where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
             arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
-    print(time.time() - tic)
 
-# Test time that each group takes for each livelihood
-grp_process_time = {}
-for llhood in livelihoods:
-    print(llhood)
-    tic = time.time()
-    # Get subpoints
-    inpoints_list = getfilelist(inputdir_HPC, 'points_{0}_.*[.]shp$'.format(llhood))
-    for p in inpoints_list:
-        accesscalc_grouped(inpoints=p,
-                           inllhood=llhood,
-                           inbuffer_radius=bufferad[llhood],
-                           inyears=analysis_years,
-                           inbarrierweight_outras=barrierweight_outras,
-                           inforestyearly=forestyearly,
-                           incosttab_outgdb=costtab_outgdb)
-    grp_process_time[llhood] = (time.time() - tic)/10
 
-#Compute number of chunks to divide each livelihood in to process each chunk with equal time
+        # Test time that each group takes for each livelihood
+        tic = time.time()
+        # Get subpoints
+        inpoints_list = getfilelist(testdir, 'testpoints_{0}_.*[.]shp$'.format(llhood))
+        for p in inpoints_list:
+            accesscalc_grouped(inpoints=p,
+                               inllhood=llhood,
+                               inbuffer_radius=bufferad[llhood],
+                               inyears=analysis_years,
+                               inbarrierweight_outras=barrierweight_outras,
+                               inforestyearly=forestyearly,
+                               incosttab_outgdb=costtab_outgdb)
+        grp_process_time[llhood] = (time.time() - tic)/10
+
+### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
 numcores = 40  # Number of chunks to divide processing into
 maxdays = 1 #Max number of days that processes can be run at a time
-totaltime = sum([grp_process_time[llhood] * len(fishgroups[llhood]) for llhood in livelihoods])
+
+#Filter groups to process based on those already processed
+processeddict = defaultdict(list)
+groupstoprocess = defaultdict(list)
+for llhood in livelihoods:
+    print(llhood)
+    #Add group for every year
+    for year in analysis_years:
+        arcpy.env.workspace = costtab_outgdb[llhood + year]
+        for tab in arcpy.ListTables():
+            processeddict[llhood].append(
+                int(re.search('(?<=w1[_])[0-9]*'.format(llhood, year), tab).group()))
+    #Only keep groups that have not been processed for all years in analysis_years
+    groupstoprocess[llhood] = [g for g in fishgroups[llhood] if not \
+        Counter(processeddict[llhood])[g] == len(analysis_years)]
+
+#Assess amount of time reguired and number of chunks
+totaltime = sum([grp_process_time[llhood] * len(groupstoprocess[llhood]) for llhood in livelihoods])
 print('Total processing times among {0} cores: {1} days...'.format(
     numcores, totaltime/float(3600*24*numcores))) #Total time if process is divided into numcores chunks at same speed
 numchunks = math.ceil(totaltime / float(3600 * 24 * maxdays))
 print('Total number of chunks for each to be processed within {0} days among {1} cores: {2}...'.format(
     maxdays, numcores, numchunks))
 
-llhood_chunks={}
-# Assign groups to chunks
+### ------ Assign groups to chunks ------###
+llhood_chunks = {}
+formatdatadir = os.path.join(inputdir_HPC, 'Beluga_input{}'.format(time.strftime("%Y%m%d")))
+pathcheckcreate(formatdatadir, verbose=True)
+
 for llhood in livelihoods:
     print(llhood)
-    llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(fishgroups[llhood]) / totaltime)
+    llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(groupstoprocess[llhood]) / totaltime)
     print('    Number of daily-core chunks to divide {0} groups into: {1}...'.format(
         llhood, llhood_chunks[llhood]))
 
+    groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
 
-def fishgroupindexing(groupset, chunknum):
-    #Set of groups
-    #Chunk size to divide groups into
+    #Output points and ancillary data to chunk-specific gdb
+    for chunk in range(0, len(groupchunklist)):
+        print(chunk)
+        outchunkgdb = os.path.join(formatdatadir, '{0}{1}.gdb'.format(llhood, chunk))
+        pathcheckcreate(outchunkgdb, verbose=True)
+        outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}'.format(llhood, chunk))
 
-    x = np.array(list(groupset))
-    bin_step = max(groupset) / chunknum
-    bin_edges = np.arange(min(groupset),
-                          max(groupset) + bin_step,
-                          bin_step)
-    bin_number = bin_edges.size - 1
-    cond = np.zeros((x.size, bin_number), dtype=bool)
-    for i in range(bin_number):
-        cond[:, i] = np.logical_and(bin_edges[i] < x,
-                                    x < bin_edges[i + 1])
-    return [list(x[cond[:, i]]) for i in range(bin_number)]
+        arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(chunk),
+                                          where_clause='group{0} IN {1}'.format(llhood, tuple(groupchunklist[chunk])))
+        print('Copying points...')
+        arcpy.CopyFeatures_management('subpoints{}'.format(chunk), outchunkpoints)
 
-for llhood in livelihoods:
-    print(llhood)
-
-    chunkfield = 'chunknum{}'.format(llhood)
-    if chunkfield not in [f.name for f in arcpy.ListFields(pellepoints)]:
-        print('Create chunkfield...')
-        arcpy.AddField_management(pellepoints, field_name=chunkfield, field_type='SHORT')
-
-    groupchunklist = fishgroupindexing(groupset=fishgroups[llhood], chunknum=llhood_chunks[llhood])
-    for i in range(0, len(groupchunklist)):
-        print(i)
-        with arcpy.da.UpdateCursor(pellepoints, [chunkfield],
-                                   where_clause='group{0} IN {1}'.format(llhood, tuple(groupchunklist[i]))) as cursor:
-            for row in cursor:
-                row[0] = i
-                cursor.updateRow(row)
-
-    arcpy.SplitByAttributes_analysis(Input_Table=pellepoints,
-                                     Target_Workspace=inputdir_HPC,
-                                     Split_Fields=chunkfield)
+        print('Copying ancillary data...')
+        for yr in analysis_years:
+            #Copy barrier raster
+            arcpy.CopyRaster_management(barrierweight_outras[llhood + yr],
+                                        os.path.join(outchunkgdb, os.path.split(barrierweight_outras[llhood + yr])[1]))
+            #Copy forest cover
+            arcpy.CopyRaster_management(forestyearly[yr],
+                                        os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
 
 
+####################################################################################################################
+# Buffer+ access calc + zonal stats for a given chunk
+####################################################################################################################
+def accesscalc_chunkedir(inchunkdir, inyears):
+    print('Processing group # {}...'.format(inpoints))
+
+    infishgroup = re.search('[0-9]*(?=[.]shp$)', inpoints).group()
+
+    buff_memory = r'in_memory/subbuffers{}'.format(infishgroup)
+
+    # Buffer subsetted points based on livelihood-specific buffer distance
+    arcpy.Buffer_analysis(in_features=inpoints,
+                          out_feature_class=buff_memory,
+                          buffer_distance_or_field=inbuffer_radius,
+                          dissolve_option='NONE',
+                          method='PLANAR')
+
+    tic = time.time()
+    # Iterate through years of analysis
+    for year in inyears:
+        print(year)
+        # Compute cost distance and access
+        arcpy.env.mask = buff_memory
+        if inllhood == 'Charcoal_production':
+            # forest resource weighting*(1/(1+cost))
+            accessras = Int(100 * Raster(inforestyearly[year]) * \
+                            (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                   in_cost_raster=inbarrierweight_outras[
+                                                       inllhood + year]))))
+        else:
+            # (1/(1+cost))
+            accessras = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                         in_cost_raster=inbarrierweight_outras[
+                                                             inllhood + year]))))
+
+        # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
+        # Compute mean access within livelihood-specific buffer and writes it out to table
+        ZonalStatisticsAsTable(in_zone_data=buff_memory,
+                               zone_field='pointid',
+                               in_value_raster=accessras,
+                               out_table=os.path.join(incosttab_outgdb[inllhood + year],
+                                                      'CD_{0}_{1}_w1_{2}'.format(inllhood, year,
+                                                                                 infishgroup)),
+                               ignore_nodata='DATA',
+                               statistics_type='MEAN')
+    toc = time.time()
+    print('Took {} s...'.format(toc - tic))
+
+    # except Exception:
+    #    traceback.print_exc()
+    # arcpy.Delete_management(tmpdir)
+
+    # if arcpy.Exists(tmpdir):
+    #   arcpy.Delete_management(tmpdir)
 
 
+####################################################################################################################
+# Other ways to chunks
+####################################################################################################################
+chunkfield = 'chunknum{}'.format(llhood)
+if chunkfield not in [f.name for f in arcpy.ListFields(pellepoints)]:
+    print('Create chunkfield...')
+    arcpy.AddField_management(pellepoints, field_name=chunkfield, field_type='SHORT')
 
+groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
+for i in range(0, len(groupchunklist)):
+    print(i)
+    with arcpy.da.UpdateCursor(pellepoints, [chunkfield],
+                               where_clause='group{0} IN {1}'.format(llhood, tuple(groupchunklist[i]))) as cursor:
+        for row in cursor:
+            row[0] = i
+            cursor.updateRow(row)
 
-
-
-
-
-
-
-
-
-
-
+arcpy.SplitByAttributes_analysis(Input_Table=pellepoints,
+                                 Target_Workspace=inputdir_HPC,
+                                 Split_Fields=chunkfield)
 
 ########################################### BENCHMARKING OF SPLITTING ###############################################################
 ####---- Arcpy - Iterative point selection and shapefile writing: ~310 sec (Bovine, 1000 groups, ~12h total), ~441 sec (Charcoal, 1000 groups, ~ 123h total) ----####
@@ -560,7 +619,8 @@ for group in fishgroups[1:1000]:
     if group % 100000 == 0:  # Homemade progress bar: print row number every 100,000th row
         print(group)
 
-    outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
+
+        outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
     if not arcpy.Exists(outpoints):
         # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
         arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),

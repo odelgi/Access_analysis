@@ -3,6 +3,7 @@ import re
 import arcpy
 from arcpy.sa import *
 import time
+import numpy as np
 
 # Functions
 def getfilelist(dir, repattern):
@@ -41,6 +42,21 @@ def pathcheckcreate(path, verbose=True):
                 print('Create {}...'.format(dir))
             path = os.path.join(path, dir)
             os.mkdir(path)
+
+def groupindexing(grouplist, chunknum):
+    # Set of groups
+    # Chunk size to divide groups into
+    x = np.array(grouplist)
+    bin_step = max(grouplist) / chunknum
+    bin_edges = np.arange(min(grouplist),
+                          max(grouplist) + bin_step,
+                          bin_step)
+    bin_number = bin_edges.size - 1
+    cond = np.zeros((x.size, bin_number), dtype=bool)
+    for i in range(bin_number):
+        cond[:, i] = np.logical_and(bin_edges[i] <= x,
+                                    x < bin_edges[i + 1])
+    return [list(x[cond[:, i]]) for i in range(bin_number)]
 
 def accesscalc_grouped(inpoints, inllhood, inbuffer_radius, inyears, inbarrierweight_outras,
                    inforestyearly, incosttab_outgdb):
@@ -95,3 +111,54 @@ def accesscalc_grouped(inpoints, inllhood, inbuffer_radius, inyears, inbarrierwe
     # if arcpy.Exists(tmpdir):
     #   arcpy.Delete_management(tmpdir)
 
+# def accesscalc_chunkedir(inchunkdir, inyears):
+#     print('Processing group # {}...'.format(inpoints))
+#
+#     infishgroup = re.search('[0-9]*(?=[.]shp$)', inpoints).group()
+#
+#     buff_memory = r'in_memory/subbuffers{}'.format(infishgroup)
+#
+#     # Buffer subsetted points based on livelihood-specific buffer distance
+#     arcpy.Buffer_analysis(in_features=inpoints,
+#                           out_feature_class=buff_memory,
+#                           buffer_distance_or_field=inbuffer_radius,
+#                           dissolve_option='NONE',
+#                           method='PLANAR')
+#
+#     tic = time.time()
+#     # Iterate through years of analysis
+#     for year in inyears:
+#         print(year)
+#         # Compute cost distance and access
+#         arcpy.env.mask = buff_memory
+#         if inllhood == 'Charcoal_production':
+#             # forest resource weighting*(1/(1+cost))
+#             accessras = Int(100 * Raster(inforestyearly[year]) * \
+#                             (1 / (1 + CostDistance(in_source_data=inpoints,
+#                                                    in_cost_raster=inbarrierweight_outras[
+#                                                        inllhood + year]))))
+#         else:
+#             # (1/(1+cost))
+#             accessras = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
+#                                                          in_cost_raster=inbarrierweight_outras[
+#                                                              inllhood + year]))))
+#
+#         # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
+#         # Compute mean access within livelihood-specific buffer and writes it out to table
+#         ZonalStatisticsAsTable(in_zone_data=buff_memory,
+#                                zone_field='pointid',
+#                                in_value_raster=accessras,
+#                                out_table=os.path.join(incosttab_outgdb[inllhood + year],
+#                                                       'CD_{0}_{1}_w1_{2}'.format(inllhood, year,
+#                                                                                  infishgroup)),
+#                                ignore_nodata='DATA',
+#                                statistics_type='MEAN')
+#     toc = time.time()
+#     print('Took {} s...'.format(toc - tic))
+#
+#     # except Exception:
+#     #    traceback.print_exc()
+#     # arcpy.Delete_management(tmpdir)
+#
+#     # if arcpy.Exists(tmpdir):
+#     #   arcpy.Delete_management(tmpdir)
