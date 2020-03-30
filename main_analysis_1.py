@@ -14,6 +14,7 @@ where
 # Import system modules
 import arcpy
 from arcpy.sa import *
+import numpy as np
 import os #Module for operating system operations (e.g. os.path.exists)
 import re #Module for string pattern matching
 import requests #Module to access URLs
@@ -21,45 +22,8 @@ import pandas as pd #Module for manipulating tables (non-gis tables mostly) http
 from usgs import api #Module to grab landsat data
 from collections import defaultdict
 import time
-import geopandas
-
-#Functions
-def getfilelist(dir, repattern):
-    """Function to iteratively go through all subdirectories inside 'dir' path
-    and retrieve path for each file that matches "repattern"""
-    return [os.path.join(dirpath, file)
-            for (dirpath, dirnames, filenames) in os.walk(dir)
-            for file in filenames if re.search(repattern, file)]
-
-def pathcheckcreate(path, verbose=True):
-    """"Function that takes a path as input and:
-      1. Checks which directories and .gdb exist in the path
-      2. Creates the ones that don't exist"""
-
-    dirtocreate= []
-    #Loop upstream through path to check which directories exist, adding those that don't exist to dirtocreate list
-    while not os.path.exists(os.path.join(path)):
-        dirtocreate.append(os.path.split(path)[1])
-        path = os.path.split(path)[0]
-
-    dirtocreate.reverse()
-
-    #After reversing list, iterate through directories to create starting with the most upstream one
-    for dir in dirtocreate:
-        #If gdb doesn't exist yet, use arcpy method to create it and then stop the loop to prevent from trying to create anything inside it
-        if os.path.splitext(dir)[1] == '.gdb':
-            if verbose:
-                print('Create {}...'.format(dir))
-            arcpy.CreateFileGDB_management(out_folder_path=path,
-                                           out_name=dir)
-            break
-
-        #Otherwise, if it is a directory name (no extension), make a new directory
-        elif os.path.splitext(dir)[1] == '':
-            if verbose:
-                print('Create {}...'.format(dir))
-            path = os.path.join(path, dir)
-            os.mkdir(path)
+import math
+from internal_functions import *
 
 ### Set environment settings ###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
@@ -129,8 +93,8 @@ weighting_table = os.path.join(datadir, 'Weighting_scheme.xlsx')
 
 ### Output variables ####
 basemapgdb = os.path.join(resdir,
-                           "Base_layers_Pellegrini",
-                           "Basemaps_UTM20S.gdb")
+                          "Base_layers_Pellegrini",
+                          "Basemaps_UTM20S.gdb")
 pathcheckcreate(basemapgdb)
 
 pelleUTM20S = os.path.join(basemapgdb, "Pellegri_department_outline_UTM20S")
@@ -384,14 +348,16 @@ for llhood in livelihoods:
                                    in_rasters= [[pelleras, "pelleoverlap"]],
                                    bilinear_interpolate_values="NONE")
     else:
-        print('Extract fishnet cell number to points for {}...'.format(llhood))
-        if 'grid_code' in [f.name for f in arcpy.ListFields(fishpoints)]:
-            arcpy.DeleteField_management(in_table = fishpoints, drop_field='grid_code')
-        ####################### TO DEAL WITH IT ######################################
-        ExtractMultiValuesToPoints(in_point_features=fishpoints,
-                                   in_rasters= [[fishras, 'grid_code']],
-                                   bilinear_interpolate_values="NONE")
+        if not 'gc_{}'.format(llhood) in [f.name for f in arcpy.ListFields(fishpoints)]:
+            print('Extract fishnet cell number to points for {}...'.format(llhood))
+            ExtractMultiValuesToPoints(in_point_features=fishpoints,
+                                       in_rasters= [[fishras, 'grid_code']],
+                                       bilinear_interpolate_values="NONE")
 
+    arcpy.AlterField_management(fishpoints,
+                                field='grid_code',
+                                new_field_name='gc_{}'.format(llhood),
+                                new_field_alias='gc_{}'.format(llhood))
     #Assign group to each point
     print('Compute point coordinates...')
     if not ('POINT_X' in [f.name for f in arcpy.ListFields(fishpoints)]):
@@ -405,13 +371,13 @@ for llhood in livelihoods:
                                   field_type='LONG')
         groupdict = defaultdict(lambda: 1) #Create a dictionary for which key corresponds to the fishnet cell number and the default value is 1
         with arcpy.da.UpdateCursor(in_table=fishpoints,
-                                   field_names=['grid_code', 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
-                                    sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
+                                   field_names=['gc_{}'.format(llhood), 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
+                                   sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
             x=0
             for row in cursor: #Iterate through points first column-wise, then row-wise
                 if x % 100000 == 0: #Homemade progress bar: print row number every 100,000th row
                     print(x)
-                row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'grid_code' in fishpoints)
+                row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'gc_llhood' in fishpoints)
                 groupdict[row[0]] +=1  #Add one to group value in dictionary for that fishnet cell (so that the next point that fall within that cell gets the same group number + 1)
                 cursor.updateRow(row) #Write value to table
                 x+=1
@@ -425,22 +391,168 @@ if not arcpy.Exists(pellepoints):
     arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class=pellepoints)
 
 
+
+
+
+
+
+
+
+
+
+
+
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+
+"""
+Each job on Béluga should have a duration of at least one hour (five minutes for test jobs) 
+and a user cannot have more than 1000 jobs, running and queued, at any given moment. 
+The maximum duration for a job on Béluga is 7 days (168 hours).
+A user can access 40 cores at a time, with each core 2 x Intel Gold 6148 Skylake @ 2.4 GHz, in total 1 x SSD 480G
+
+
+To do:
+- In calcgroup function:
+    - Get buffer radius from point name
+    - Join zonal statistics results into table
+    - Benchmark intersection of buffers with pellegrini department to speed up analysis + others
+
+- Test new set up in parallel
+- Read tables of processed data to assess what groups are left to process
+- Computer chunks for remaining groups-livelihoods
+- Output points into separate directories
+- Zip it all up
+"""
 # LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
-#for llhood in livelihoods:
-llhood = 'Charcoal_production'
-print('Creating points and buffers for {}...'.format(llhood))
-if not getfilelist(inputdir_HPC, '{}*'.format(llhood)):
-    print('Adding index to pellepoints...')
-    if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
-        arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
-                                  index_name='group{}'.format(llhood))  # Add index to speed up querying
 
-    print('Getting groups...')
-    fishgroups = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
+#Add index to points and get list of groups
+fishgroups = defaultdict(set)
+for llhood in livelihoods:
+    # llhood = 'Charcoal_production'
+    print('Creating points and buffers for {}...'.format(llhood))
+    if not getfilelist(inputdir_HPC, '{}*'.format(llhood)):
+        print('Adding index to pellepoints...')
+        if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
+            arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
+                                      index_name='group{}'.format(llhood))  # Add index to speed up querying
 
-    print('Processing {} groups...'.format(len(fishgroups)))
+        print('Getting groups...')
+        fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
-########################################### BENCHMARKING ###############################################################
+        print('Processing {} groups...'.format(len(fishgroups[llhood])))
+
+for k, v in fishgroups.items():
+    print(k)
+    print(len(v))
+
+# Output points for 10 groups for each livelihood
+for llhood in livelihoods:
+    tic = time.time()
+    for group in list(fishgroups[llhood])[1:10]:
+        # if group % 100000 == 0:  # Homemade progress bar: print row number every 100,000th row
+        print(group)
+
+        outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
+        if not arcpy.Exists(outpoints):
+            # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
+            arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),
+                                              where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+            arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
+    print(time.time() - tic)
+
+# Test time that each group takes for each livelihood
+grp_process_time = {}
+for llhood in livelihoods:
+    print(llhood)
+    tic = time.time()
+    # Get subpoints
+    inpoints_list = getfilelist(inputdir_HPC, 'points_{0}_.*[.]shp$'.format(llhood))
+    for p in inpoints_list:
+        accesscalc_grouped(inpoints=p,
+                           inllhood=llhood,
+                           inbuffer_radius=bufferad[llhood],
+                           inyears=analysis_years,
+                           inbarrierweight_outras=barrierweight_outras,
+                           inforestyearly=forestyearly,
+                           incosttab_outgdb=costtab_outgdb)
+    grp_process_time[llhood] = (time.time() - tic)/10
+
+#Compute number of chunks to divide each livelihood in to process each chunk with equal time
+numcores = 40  # Number of chunks to divide processing into
+maxdays = 1 #Max number of days that processes can be run at a time
+totaltime = sum([grp_process_time[llhood] * len(fishgroups[llhood]) for llhood in livelihoods])
+print('Total processing times among {0} cores: {1} days...'.format(
+    numcores, totaltime/float(3600*24*numcores))) #Total time if process is divided into numcores chunks at same speed
+numchunks = math.ceil(totaltime / float(3600 * 24 * maxdays))
+print('Total number of chunks for each to be processed within {0} days among {1} cores: {2}...'.format(
+    maxdays, numcores, numchunks))
+
+llhood_chunks={}
+# Assign groups to chunks
+for llhood in livelihoods:
+    print(llhood)
+    llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(fishgroups[llhood]) / totaltime)
+    print('    Number of daily-core chunks to divide {0} groups into: {1}...'.format(
+        llhood, llhood_chunks[llhood]))
+
+
+def fishgroupindexing(groupset, chunknum):
+    #Set of groups
+    #Chunk size to divide groups into
+
+    x = np.array(list(groupset))
+    bin_step = max(groupset) / chunknum
+    bin_edges = np.arange(min(groupset),
+                          max(groupset) + bin_step,
+                          bin_step)
+    bin_number = bin_edges.size - 1
+    cond = np.zeros((x.size, bin_number), dtype=bool)
+    for i in range(bin_number):
+        cond[:, i] = np.logical_and(bin_edges[i] < x,
+                                    x < bin_edges[i + 1])
+    return [list(x[cond[:, i]]) for i in range(bin_number)]
+
+for llhood in livelihoods:
+    print(llhood)
+
+    chunkfield = 'chunknum{}'.format(llhood)
+    if chunkfield not in [f.name for f in arcpy.ListFields(pellepoints)]:
+        print('Create chunkfield...')
+        arcpy.AddField_management(pellepoints, field_name=chunkfield, field_type='SHORT')
+
+    groupchunklist = fishgroupindexing(groupset=fishgroups[llhood], chunknum=llhood_chunks[llhood])
+    for i in range(0, len(groupchunklist)):
+        print(i)
+        with arcpy.da.UpdateCursor(pellepoints, [chunkfield],
+                                   where_clause='group{0} IN {1}'.format(llhood, tuple(groupchunklist[i]))) as cursor:
+            for row in cursor:
+                row[0] = i
+                cursor.updateRow(row)
+
+    arcpy.SplitByAttributes_analysis(Input_Table=pellepoints,
+                                     Target_Workspace=inputdir_HPC,
+                                     Split_Fields=chunkfield)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+########################################### BENCHMARKING OF SPLITTING ###############################################################
 ####---- Arcpy - Iterative point selection and shapefile writing: ~310 sec (Bovine, 1000 groups, ~12h total), ~441 sec (Charcoal, 1000 groups, ~ 123h total) ----####
 fishgroups = list(fishgroups)
 tic = time.time()
@@ -448,7 +560,7 @@ for group in fishgroups[1:1000]:
     if group % 100000 == 0:  # Homemade progress bar: print row number every 100,000th row
         print(group)
 
-    outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, bufferad[llhood], group)
+    outpoints = os.path.join(inputdir_HPC, 'points_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
     if not arcpy.Exists(outpoints):
         # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
         arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),
@@ -456,10 +568,10 @@ for group in fishgroups[1:1000]:
         arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
 print(time.time() - tic)
 
-
 ####---- Arcpy - Split by attributes: 209 seconds (Bovine, 1000 groups, ~10h total), (Charcoal, 1000 groups, ~2.6 days total) ----#####
 arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints',
-                                  where_clause='{0} < 1000'.format('group{}'.format(llhood))) #.format('group{}'.format(llhood), group))
+                                  where_clause='{0} < 1000'.format(
+                                      'group{}'.format(llhood)))  # .format('group{}'.format(llhood), group))
 tic = time.time()
 arcpy.SplitByAttributes_analysis(Input_Table='subpoints',
                                  Target_Workspace=inputdir_HPC,
@@ -467,15 +579,14 @@ arcpy.SplitByAttributes_analysis(Input_Table='subpoints',
 print(time.time() - tic)
 
 ###--- cursor + dictionary + cPickle--- deadly slow ###
-#groupdict = {row[0]:row[1] for row in arcpy.da.SearchCursor(pellepoints, ['group{}'.format(llhood), 'SHAPE@'])}
+# groupdict = {row[0]:row[1] for row in arcpy.da.SearchCursor(pellepoints, ['group{}'.format(llhood), 'SHAPE@'])}
 
 ###---- numpy array ----
 import numpy as np
+
 arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints',
                                   where_clause='{0} < 1000'.format(
                                       'group{}'.format(llhood)))  # .format('group{}'.format(llhood), group))
 grouparr = arcpy.da.FeatureClassToNumPyArray('subpoints', field_names=['group{}'.format(llhood), 'SHAPE@XY'])
 grouparrdict = {}
 [grouparrdict[labels == l] for l in np.unique(grouparr)]
-
-
