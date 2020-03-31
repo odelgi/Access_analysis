@@ -58,13 +58,9 @@ def groupindexing(grouplist, chunknum):
                                     x < bin_edges[i + 1])
     return [list(x[cond[:, i]]) for i in range(bin_number)]
 
-def accesscalc_grouped(inpoints, inllhood, inbuffer_radius, inyears, inbarrierweight_outras,
-                   inforestyearly, incosttab_outgdb):
-    print('Processing group # {}...'.format(inpoints))
-
-    infishgroup = re.search('[0-9]*(?=[.]shp$)', inpoints).group()
-
-    buff_memory = r'in_memory/subbuffers{}'.format(infishgroup)
+def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierweight_outras,
+               inforestyearly, costtab_outgdb):
+    buff_memory = r'in_memory/subbuffers{}'.format(ingroup)
 
     # Buffer subsetted points based on livelihood-specific buffer distance
     arcpy.Buffer_analysis(in_features=inpoints,
@@ -73,7 +69,6 @@ def accesscalc_grouped(inpoints, inllhood, inbuffer_radius, inyears, inbarrierwe
                           dissolve_option='NONE',
                           method='PLANAR')
 
-    tic = time.time()
     # Iterate through years of analysis
     for year in inyears:
         print(year)
@@ -96,69 +91,36 @@ def accesscalc_grouped(inpoints, inllhood, inbuffer_radius, inyears, inbarrierwe
         ZonalStatisticsAsTable(in_zone_data=buff_memory,
                                zone_field='pointid',
                                in_value_raster=accessras,
-                               out_table=os.path.join(incosttab_outgdb[inllhood + year],
+                               out_table=os.path.join(costtab_outgdb[inllhood + year],
                                                       'CD_{0}_{1}_w1_{2}'.format(inllhood, year,
-                                                                                 infishgroup)),
+                                                                                 ingroup)),
                                ignore_nodata='DATA',
                                statistics_type='MEAN')
-    toc = time.time()
-    print('Took {} s...'.format(toc - tic))
 
-    # except Exception:
-    #    traceback.print_exc()
-    # arcpy.Delete_management(tmpdir)
+def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
+    rootname = os.path.splitext(os.path.split(inchunkgdb)[1])[0]
+    llhood = re.search('[aA-zZ]*[_][aA-zZ]*', rootname).group()
+    bufferrad = re.search('[0-9]*(?=_)', rootname).group()
+    inpoints = 'subpoints{}'.format(rootname)
+    barrierweight_outras = {year: '{0}_bw1_{1}'.format(llhood, year) for year in inyears}
+    forestyearly = {year: 'Hansen_GFC_v16_treecover{}'.format(year) for year in inyears}
 
-    # if arcpy.Exists(tmpdir):
-    #   arcpy.Delete_management(tmpdir)
+    arcpy.AddIndex_management(inpoints, fields='group{}'.format(llhood),
+                              index_name='group{}'.format(llhood))  # Add index to speed up querying
 
-# def accesscalc_chunkedir(inchunkdir, inyears):
-#     print('Processing group # {}...'.format(inpoints))
-#
-#     infishgroup = re.search('[0-9]*(?=[.]shp$)', inpoints).group()
-#
-#     buff_memory = r'in_memory/subbuffers{}'.format(infishgroup)
-#
-#     # Buffer subsetted points based on livelihood-specific buffer distance
-#     arcpy.Buffer_analysis(in_features=inpoints,
-#                           out_feature_class=buff_memory,
-#                           buffer_distance_or_field=inbuffer_radius,
-#                           dissolve_option='NONE',
-#                           method='PLANAR')
-#
-#     tic = time.time()
-#     # Iterate through years of analysis
-#     for year in inyears:
-#         print(year)
-#         # Compute cost distance and access
-#         arcpy.env.mask = buff_memory
-#         if inllhood == 'Charcoal_production':
-#             # forest resource weighting*(1/(1+cost))
-#             accessras = Int(100 * Raster(inforestyearly[year]) * \
-#                             (1 / (1 + CostDistance(in_source_data=inpoints,
-#                                                    in_cost_raster=inbarrierweight_outras[
-#                                                        inllhood + year]))))
-#         else:
-#             # (1/(1+cost))
-#             accessras = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
-#                                                          in_cost_raster=inbarrierweight_outras[
-#                                                              inllhood + year]))))
-#
-#         # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
-#         # Compute mean access within livelihood-specific buffer and writes it out to table
-#         ZonalStatisticsAsTable(in_zone_data=buff_memory,
-#                                zone_field='pointid',
-#                                in_value_raster=accessras,
-#                                out_table=os.path.join(incosttab_outgdb[inllhood + year],
-#                                                       'CD_{0}_{1}_w1_{2}'.format(inllhood, year,
-#                                                                                  infishgroup)),
-#                                ignore_nodata='DATA',
-#                                statistics_type='MEAN')
-#     toc = time.time()
-#     print('Took {} s...'.format(toc - tic))
-#
-#     # except Exception:
-#     #    traceback.print_exc()
-#     # arcpy.Delete_management(tmpdir)
-#
-#     # if arcpy.Exists(tmpdir):
-#     #   arcpy.Delete_management(tmpdir)
+    # Iterate through groups
+    grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
+    for group in grouplist:
+        print(group)
+        arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
+                                          where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+        accesscalc(ingroup=group,
+                   inllhood=llhood,
+                   inpoints='pointslyr_{}'.format(group),
+                   inbuffer_radius=bufferrad,
+                   inyears=inyears,
+                   inbarrierweight_outras=barrierweight_outras,
+                   inforestyearly=forestyearly,
+                   costtab_outgdb=outgdb)
+
+        arcpy.Delete_management('pointslyr_{}'.format(group))
