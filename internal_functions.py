@@ -4,12 +4,12 @@ import traceback
 import re
 import arcpy
 from arcpy.sa import *
+import scipy
 import time
 import numpy as np
+from concurrent.futures import TimeoutError
 
-#To do:
-#Add numba jit capability and assess whether it speeds up analysis
-#from numba import jit
+#Alternatives to cost distance calculation: in R https://www.sciencedirect.com/science/article/pii/S2352711019302341 (assuredly slow)
 
 # Functions
 def getfilelist(dir, repattern):
@@ -241,6 +241,7 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
     grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
     for group in grouplist:
         print(group)
+        tic=time.time()
         arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
                                           where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
         accesscalc2(inllhood=llhood,
@@ -253,7 +254,52 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
                     costtab_outgdb=outgdb)
 
         arcpy.Delete_management('pointslyr_{}'.format(group))
+        print(time.time() - tic)
     arcpy.ClearEnvironment('workspace')
+
+def accesscalc_chunkedir2(inchunkgdb, inyears, outgdb):
+    arcpy.env.workspace = inchunkgdb
+    arcpy.env.scratchWorkspace = 'in_memory'
+    rootname = os.path.splitext(os.path.split(inchunkgdb)[1])[0]
+    llhood = re.search('[aA-zZ]*[_][aA-zZ]*', rootname).group()
+    bufferrad = re.search('[0-9]*(?=_[0-9]*$)', rootname).group()
+    inpoints = 'subpoints{}'.format(rootname)
+    barrierweight_outras = {year: '{0}_bw1_{1}'.format(llhood, year) for year in inyears}
+    forestyearly = {year: 'Hansen_GFC_v16_treecover{}'.format(year) for year in inyears}
+    print(rootname)
+
+    if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(inpoints).indexes]:
+        arcpy.AddIndex_management(inpoints, fields='group{}'.format(llhood),
+                                  index_name='group{}'.format(llhood))  # Add index to speed up querying
+
+    # Iterate through groups
+    grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
+    for group in grouplist:
+        print(group)
+        tic = time.time()
+        arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
+                                          where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+        accesscalc2(inllhood=llhood,
+                    ingroup=group,
+                    inpoints='pointslyr_{}'.format(group),
+                    inbuffer_radius=bufferrad,
+                    inyears=inyears,
+                    inbarrierweight_outras=barrierweight_outras,
+                    inforestyearly=forestyearly,
+                    costtab_outgdb=outgdb)
+
+        arcpy.Delete_management('pointslyr_{}'.format(group))
+        print(time.time() - tic)
+    arcpy.ClearEnvironment('workspace')
+
+def task_done(future):
+    try:
+        future.result()  # blocks until results are ready
+    except TimeoutError as error:
+        print("Function took longer than %d seconds" % error.args[1])
+    except Exception as error:
+        print("Function raised %s" % error)
+        print(error.traceback)  # traceback of the function
 
 if __name__ == '__main__':
     import cProfile
@@ -272,17 +318,19 @@ if __name__ == '__main__':
     pathcheckcreate(outstats)
     analysis_years = ['2000', '2010', '2018']
 
-    for gb in ingdbs:
-        print(gb)
-        arcpy.env.workspace = gb
-        for i in arcpy.ListRasters('CostDis_subp*'):
-            arcpy.Delete_management(i)
+    # for gb in ingdbs:
+    #     print(gb)
+    #     arcpy.env.workspace = gb
+    #     for i in arcpy.ListRasters('CostDis_subp*'):
+    #         arcpy.Delete_management(i)
+
+    accesscalc_chunkedir2(ingdbs[3], inyears = analysis_years, outgdb = outstats)
 
 
-    for gb in ingdbs[2:]:
-        accesscalc_chunkedir(gb,
-                             inyears = analysis_years,
-                             outgdb = outstats)
+    # for gb in ingdbs[2:]:
+    #     accesscalc_chunkedir(gb,
+    #                          inyears = analysis_years,
+    #                          outgdb = outstats)
 
 
     inyears = ['2000', '2010', '2018']
@@ -324,17 +372,14 @@ if __name__ == '__main__':
                 inforestyearly=forestyearly,
                 costtab_outgdb=outgdb)""")
 
-
-#Extra stuff
-# def access_mapalgebra(inllhood, inforestyearly, inbarrierweight_outras, year):
-#     if inllhood == 'Charcoal_production':
-#         # forest resource weighting*(1/(1+cost))
-#         return (Int(100 * Raster(inforestyearly[year]) * \
-#                     (1 / (1 + CostDistance(in_source_data=inpoints,
-#                                            in_cost_raster=inbarrierweight_outras[year])))))
-#     else:
-#         # (1/(1+cost))
-#         return(Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
-#                                                 in_cost_raster=inbarrierweight_outras[year])))))
-
-
+    #Extra stuff
+    # def access_mapalgebra(inllhood, inforestyearly, inbarrierweight_outras, year):
+    #     if inllhood == 'Charcoal_production':
+    #         # forest resource weighting*(1/(1+cost))
+    #         return (Int(100 * Raster(inforestyearly[year]) * \
+    #                     (1 / (1 + CostDistance(in_source_data=inpoints,
+    #                                            in_cost_raster=inbarrierweight_outras[year])))))
+    #     else:
+    #         # (1/(1+cost))
+    #         return(Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
+    #                                                 in_cost_raster=inbarrierweight_outras[year])))))

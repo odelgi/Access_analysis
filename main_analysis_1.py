@@ -462,11 +462,6 @@ for llhood in livelihoods:
         print(toc - tic)
         grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 5
 
-import cProfile
-cProfile.run("accesscalc3(inllhood=llhood, ingroup=group, inpoints=outpoints, inbuffer_radius=bufferad[llhood],\
-inlimits=pelleras, inyears=analysis_years, inbarrierweight_outras=inbw,inforestyearly=forestyearly,costtab_outgdb=testgdb)")
-
-
 ### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
 numcores = 40  # Number of chunks to divide processing into
 maxdays = 1 #Max number of days that processes can be run at a time
