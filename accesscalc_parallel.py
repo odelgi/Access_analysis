@@ -4,12 +4,10 @@ from functools import partial
 from internal_functions import *
 from pebble import ProcessPool
 
-
 arcpy.env.overwriteOutput = 'True'
 arcpy.CheckOutExtension("Spatial")
 
 #To do:
-#   - Add timeout: switch from multiprocessing to pebble https://pythonhosted.org/Pebble/#pools
 #   - Add logging: from multiprocessing_logging import install_mp_handler
 #   - Convert to Snakemake?
 
@@ -32,14 +30,13 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    #Define maximum running time of worker processes
-    maxruntime =30
-
-    #Try async with timeout
+    maxruntime = 180  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
         #Assign chunked gdbs to worker processes, keeping analysis years and outstats arguments constant with 'partial'
         future = pool.map(partial(accesscalc_chunkedir, inyears=analysis_years, outgdb=outstats),
-                          ingdbs) #Raise timeout error after maxruntime
+                          ingdbs,
+                          chunksize=int(0.5 + len(ingdbs) / float(ncpus)),  # Divide all gdbs among chunks upfront so that timeout doesn't lead to new worker process
+                          timeout=maxruntime) #Raise timeout error after maxruntime
         task_done(future) #Return timeout error

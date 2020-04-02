@@ -4,12 +4,9 @@ import traceback
 import re
 import arcpy
 from arcpy.sa import *
-import scipy
 import time
 import numpy as np
 from concurrent.futures import TimeoutError
-
-#Alternatives to cost distance calculation: in R https://www.sciencedirect.com/science/article/pii/S2352711019302341 (assuredly slow)
 
 # Functions
 def getfilelist(dir, repattern):
@@ -156,7 +153,7 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
     grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
     for group in grouplist:
         print(group)
-        tic = time.time()
+        #tic = time.time()
         arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
                                           where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
         accesscalc(inllhood=llhood,
@@ -169,7 +166,7 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
                    costtab_outgdb=outgdb)
 
         arcpy.Delete_management('pointslyr_{}'.format(group))
-        print(time.time() - tic)
+        #print(time.time() - tic)
     arcpy.ClearEnvironment('workspace')
 
 def task_done(future):
@@ -182,6 +179,7 @@ def task_done(future):
         print(error.traceback)  # traceback of the function
 
 if __name__ == '__main__':
+    ####### TROUBLESHOOTING AND PROFILING CODE #############
     import cProfile
 
     arcpy.env.overwriteOutput = 'True'
