@@ -348,17 +348,20 @@ for llhood in livelihoods:
         ExtractMultiValuesToPoints(in_point_features=fishpoints,
                                    in_rasters= [[pelleras, "pelleoverlap"]],
                                    bilinear_interpolate_values="NONE")
+        arcpy.AlterField_management(fishpoints,
+                                    field='grid_code',
+                                    new_field_name='gc_{}'.format(llhood),
+                                    new_field_alias='gc_{}'.format(llhood))
     else:
         if not 'gc_{}'.format(llhood) in [f.name for f in arcpy.ListFields(fishpoints)]:
             print('Extract fishnet cell number to points for {}...'.format(llhood))
             ExtractMultiValuesToPoints(in_point_features=fishpoints,
                                        in_rasters= [[fishras, 'grid_code']],
                                        bilinear_interpolate_values="NONE")
-
-    arcpy.AlterField_management(fishpoints,
-                                field='grid_code',
-                                new_field_name='gc_{}'.format(llhood),
-                                new_field_alias='gc_{}'.format(llhood))
+            arcpy.AlterField_management(fishpoints,
+                                        field='grid_code',
+                                        new_field_name='gc_{}'.format(llhood),
+                                        new_field_alias='gc_{}'.format(llhood))
     #Assign group to each point
     print('Compute point coordinates...')
     if not ('POINT_X' in [f.name for f in arcpy.ListFields(fishpoints)]):
@@ -391,20 +394,6 @@ if not arcpy.Exists(pellepoints):
                                       where_clause='pelleoverlap = 0')
     arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class=pellepoints)
 
-
-
-
-
-
-
-
-
-
-
-
-
-########################################################################################################################
-########################################################################################################################
 ########################################################################################################################
 ########################################################################################################################
 
@@ -414,10 +403,8 @@ and a user cannot have more than 1000 jobs, running and queued, at any given mom
 The maximum duration for a job on Béluga is 7 days (168 hours).
 A user can access 40 cores at a time, with each core 2 x Intel Gold 6148 Skylake @ 2.4 GHz, in total 1 x SSD 480G
 
-
 To do:
 - In calcgroup function:
-    - Get buffer radius from point name
     - Join zonal statistics results into table
     - Benchmark intersection of buffers with pellegrini department to speed up analysis + others
 
@@ -428,24 +415,25 @@ To do:
 
 ### ------ Add index to points, get list of groups, and run analysis on 10 groups to check speed ----- ####
 fishgroups = defaultdict(set)
-testdir = pathcheckcreate(inputdir_HPC, 'testdir')
-testgdb = pathcheckcreate(testdir, 'test.gdb')
-grp_process_time = {}
+testdir = os.path.join(inputdir_HPC, 'testdir')
+pathcheckcreate(testdir)
+testgdb = os.path.join(testdir, 'test.gdb')
+pathcheckcreate(testgdb)
+grp_process_time = defaultdict(float)
 
 for llhood in livelihoods:
-    # llhood = 'Charcoal_production'
-    print('Creating points and buffers for {}...'.format(llhood))
-    if not getfilelist(inputdir_HPC, '{}*'.format(llhood)):
+    print('Assessing access calculationg run time for {}...'.format(llhood))
+    if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
         print('Adding index to pellepoints...')
-        if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
-            arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
-                                      index_name='group{}'.format(llhood))  # Add index to speed up querying
+        arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
+                                  index_name='group{}'.format(llhood))  # Add index to speed up querying
 
+    if llhood not in fishgroups:
         print('Getting groups...')
         fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
-    # Output points for 10 groups for each livelihood
-    for group in list(fishgroups[llhood])[1:10]:
+        # Output points for 10 groups for each livelihood
+    for group in list(fishgroups[llhood])[0:5]:
         print(group)
 
         outpoints = os.path.join(testdir, 'testpoints_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
@@ -455,21 +443,29 @@ for llhood in livelihoods:
                                               where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
             arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
 
-
         # Test time that each group takes for each livelihood
+
+        inbw = {yr: barrierweight_outras['{0}{1}'.format(llhood, yr)] for yr in analysis_years}
+
         tic = time.time()
         # Get subpoints
-        inpoints_list = getfilelist(testdir, 'testpoints_{0}_.*[.]shp$'.format(llhood))
-        for p in inpoints_list:
-            accesscalc(inpoints=p,
-                       ingroup=group,
-                       inllhood=llhood,
-                       inbuffer_radius=bufferad[llhood],
-                       inyears=analysis_years,
-                       inbarrierweight_outras=barrierweight_outras,
-                       inforestyearly=forestyearly,
-                       incosttab_outgdb=testgdb)
-        grp_process_time[llhood] = (time.time() - tic)/10
+        accesscalc3(inllhood=llhood,
+                    ingroup=group,
+                    inpoints=outpoints,
+                    inbuffer_radius=bufferad[llhood],
+                    inlimits=pelleras,
+                    inyears=analysis_years,
+                    inbarrierweight_outras=inbw,
+                    inforestyearly=forestyearly,
+                    costtab_outgdb=testgdb)
+        toc = time.time()
+        print(toc - tic)
+        grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 5
+
+import cProfile
+cProfile.run("accesscalc3(inllhood=llhood, ingroup=group, inpoints=outpoints, inbuffer_radius=bufferad[llhood],\
+inlimits=pelleras, inyears=analysis_years, inbarrierweight_outras=inbw,inforestyearly=forestyearly,costtab_outgdb=testgdb)")
+
 
 ### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
 numcores = 40  # Number of chunks to divide processing into
