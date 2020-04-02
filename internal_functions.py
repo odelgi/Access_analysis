@@ -196,13 +196,13 @@ if __name__ == '__main__':
     pathcheckcreate(outstats)
     analysis_years = ['2000', '2010', '2018']
 
-    # for gb in ingdbs:
-    #     print(gb)
-    #     arcpy.env.workspace = gb
-    #     for i in arcpy.ListRasters('CostDis_subp*'):
-    #         arcpy.Delete_management(i)
+    for gb in ingdbs:
+        print(gb)
+        arcpy.env.workspace = gb
+        for i in arcpy.ListRasters('CostDis_subp*'):
+            arcpy.Delete_management(i)
 
-    accesscalc_chunkedir2(ingdbs[3], inyears = analysis_years, outgdb = outstats)
+    # accesscalc_chunkedir2(ingdbs[3], inyears = analysis_years, outgdb = outstats)
 
 
     # for gb in ingdbs[2:]:

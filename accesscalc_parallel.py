@@ -13,8 +13,7 @@ arcpy.CheckOutExtension("Spatial")
 
 if __name__ == '__main__':
     #Define directory structure
-    formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0],
-                             'results\Analysis_Chp1_W1\inputdata_HPC/Beluga_input20200331')#To update for final run
+    formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])#To update for final run
     datadir = os.path.join(formatdir, 'data')
     resdir = os.path.join(formatdir, 'results')
     arcpy.env.workspace = datadir
@@ -30,7 +29,7 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    maxruntime = 180  # Define maximum running time of worker processes
+    maxruntime = 24*3600  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
