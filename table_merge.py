@@ -1,3 +1,18 @@
+import arcpy
+import os
+import pandas as pd
+from collections import defaultdict
+from internal_functions import *
+
+formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])  # To update for final run
+resdir = os.path.join(formatdir, 'results')
+outstats = os.path.join(resdir, 'outstats.gdb')
+
+tablist = getfilelist(outstats, '*')
+tables_pd = pd.concat(pd.Series(tablist),
+                      pd.Series(tablist).str.split('_', expand=True),
+                      axis=1)
+tables_pd.columns = ['path', 'llhood', 'year', 'weighting', 'group']
 
 
 
