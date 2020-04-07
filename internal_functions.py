@@ -9,12 +9,38 @@ import numpy as np
 from concurrent.futures import TimeoutError
 
 # Functions
-def getfilelist(dir, repattern):
+def getfilelist(dir, repattern=None):
     """Function to iteratively go through all subdirectories inside 'dir' path
-    and retrieve path for each file that matches "repattern"""
-    return [os.path.join(dirpath, file)
-            for (dirpath, dirnames, filenames) in os.walk(dir)
-            for file in filenames if re.search(repattern, file)]
+    and retrieve path for each file that matches "repattern"
+    If the provided path is an ArcGIS workspace"""
+    try:
+        if arcpy.Describe(dir).dataType == 'Workspace':
+            print('{} is ArcGIS workspace...'.format(dir))
+            arcpy.env.workspace = dir
+            filenames = (arcpy.ListDatasets() or []) + (arcpy.ListTables() or []) #Either LisDatsets or ListTables may return None so need to create empty list alternative
+            if not repattern==None:
+                filenames = [os.path.join(dir, filen)
+                             for filen in filenames if re.search(repattern, filen)]
+            arcpy.ClearEnvironment('workspace')
+        else:
+            filenames = []
+            for (dirpath, dirnames, filenames) in os.walk(dir):
+                for file in filenames:
+                    if repattern is None:
+                        filenames.append(os.path.join(dirpath, file))
+                    else:
+                        if re.search(repattern, file):
+                            filenames.append(os.path.join(dirpath, file))
+        return(filenames)
+
+    # Return geoprocessing specific errors
+    except arcpy.ExecuteError:
+        arcpy.AddError(arcpy.GetMessages(2))
+    # Return any other type of error
+    except:
+        # By default any other errors will be caught here
+        e = sys.exc_info()[1]
+        print(e.args[0])
 
 def pathcheckcreate(path, verbose=True):
     """"Function that takes a path as input and:
@@ -83,46 +109,46 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
 
         # Iterate through years of analysis
         #print('Iterating through years...')
+        arcpy.env.mask = buffras_memory
+        tempaccessdict = {}
         for year in inyears:
-            #print(year)
-            # Compute cost distance and access
-            arcpy.env.mask = buffras_memory
-            if inllhood == 'Charcoal_production':
-                # forest resource weighting*(1/(1+cost))
-                accessras = Int(100 * Raster(inforestyearly[year]) * \
-                                (1 / (1 + CostDistance(in_source_data=inpoints,
-                                                       in_cost_raster=inbarrierweight_outras[year]))))
-            else:
-                # (1/(1+cost))
-                accessras = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
-                                                             in_cost_raster=inbarrierweight_outras[year]))))
+            outtab_year = os.path.join(costtab_outgdb, 'CD_{0}_{1}_w1_{2}'.format(inllhood, year, ingroup))
+            dictkey = '{0}{1}'.format(ingroup, year)
+            if not arcpy.Exists(outtab_year):
+                #print(year)
+                # Compute cost distance and access
+                if inllhood == 'Charcoal_production':
+                    # forest resource weighting*(1/(1+cost))
+                    tempaccessdict[dictkey] = Int(100 * Raster(inforestyearly[year]) * \
+                                    (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                           in_cost_raster=inbarrierweight_outras[year]))))
+                else:
+                    # (1/(1+cost))
+                    tempaccessdict[dictkey] = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                                 in_cost_raster=inbarrierweight_outras[year]))))
 
-            # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
-            # Compute mean access within livelihood-specific buffer and writes it out to table
-            #accessras.save(os.path.join(costtab_outgdb, 'test_{0}_{1}_w1_{2}'.format(inllhood, year, ingroup))
-            ZonalStatisticsAsTable(in_zone_data=buffras_memory,
-                                   zone_field='Value',
-                                   in_value_raster=accessras,
-                                   out_table=os.path.join(costtab_outgdb,
-                                                          'CD_{0}_{1}_w1_{2}'.format(inllhood, year, ingroup)),
-                                   ignore_nodata='DATA',
-                                   statistics_type='MEAN')
+                # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
+                # Compute mean access within livelihood-specific buffer and writes it out to table
+                #accessras.save(os.path.join(costtab_outgdb, 'test_{0}_{1}_w1_{2}'.format(inllhood, year, ingroup))
+                ZonalStatisticsAsTable(in_zone_data=buffras_memory,
+                                       zone_field='Value',
+                                       in_value_raster=tempaccessdict[dictkey],
+                                       out_table=outtab_year,
+                                       ignore_nodata='DATA',
+                                       statistics_type='MEAN')
 
-        #Clean up
-        try:
-            del accessras
-        except:
-            pass
+            #Clean up
+            try:
+                arcpy.Delete_management(tempaccessdict[dictkey])
+                del tempaccessdict[dictkey]
+            except:
+                pass
         arcpy.ClearEnvironment("mask")
         arcpy.Delete_management("in_memory")
+        del tempaccessdict
 
     except:
         #Clean up memory, environment, and temporary files
-        try:
-            del accessras
-        except:
-            pass
-
         arcpy.ClearEnvironment("mask")
         arcpy.Delete_management("in_memory")
 
@@ -134,9 +160,16 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
         print("PYTHON ERRORS:\nTraceback info:\n" + tbinfo + "\nError Info:\n" + str(sys.exc_info()[1]))
         print("ArcPy ERRORS:\n" + arcpy.GetMessages(2) + "\n")
 
+        try:
+            arcpy.Delete_management(tempaccessdict[dictkey])
+            del tempaccessdict[dictkey]
+        except:
+            pass
+
 def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
     arcpy.env.workspace = inchunkgdb
     arcpy.env.scratchWorkspace = 'in_memory'
+
     rootname = os.path.splitext(os.path.split(inchunkgdb)[1])[0]
     llhood = re.search('[aA-zZ]*[_][aA-zZ]*', rootname).group()
     bufferrad = re.search('[0-9]*(?=_[0-9]*$)', rootname).group()
@@ -152,21 +185,26 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outgdb):
     # Iterate through groups
     grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
     for group in grouplist:
-        print(group)
-        #tic = time.time()
-        arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
-                                          where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
-        accesscalc(inllhood=llhood,
-                   ingroup=group,
-                   inpoints='pointslyr_{}'.format(group),
-                   inbuffer_radius=bufferrad,
-                   inyears=inyears,
-                   inbarrierweight_outras=barrierweight_outras,
-                   inforestyearly=forestyearly,
-                   costtab_outgdb=outgdb)
+        #If all output tables don't already exist
+        if not all(arcpy.Exists(os.path.join(outgdb, 'CD_{0}_{1}_w1_{2}'.format(llhood, year, group)))
+                   for year in inyears):
+            print(group)
+            #tic = time.time()
+            arcpy.MakeFeatureLayer_management(in_features=inpoints, out_layer='pointslyr_{}'.format(group),
+                                              where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+            accesscalc(inllhood=llhood,
+                       ingroup=group,
+                       inpoints='pointslyr_{}'.format(group),
+                       inbuffer_radius=bufferrad,
+                       inyears=inyears,
+                       inbarrierweight_outras=barrierweight_outras,
+                       inforestyearly=forestyearly,
+                       costtab_outgdb=outgdb)
 
-        arcpy.Delete_management('pointslyr_{}'.format(group))
-        #print(time.time() - tic)
+            arcpy.Delete_management('pointslyr_{}'.format(group))
+            #print(time.time() - tic)
+        else:
+            print('Group {} was already analyzed...'.format(group))
     arcpy.ClearEnvironment('workspace')
 
 def task_done(future):
@@ -186,8 +224,7 @@ if __name__ == '__main__':
     arcpy.CheckOutExtension("Spatial")
 
     # Define directory structure
-    formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0],
-                             'results\Analysis_Chp1_W1\inputdata_HPC/Beluga_input20200331')  # To update for final run
+    formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])  # To update for final run
     datadir = os.path.join(formatdir, 'data')
     resdir = os.path.join(formatdir, 'results')
     arcpy.env.workspace = datadir
@@ -196,13 +233,15 @@ if __name__ == '__main__':
     pathcheckcreate(outstats)
     analysis_years = ['2000', '2010', '2018']
 
-    for gb in ingdbs:
-        print(gb)
-        arcpy.env.workspace = gb
-        for i in arcpy.ListRasters('CostDis_subp*'):
-            arcpy.Delete_management(i)
-
-    # accesscalc_chunkedir2(ingdbs[3], inyears = analysis_years, outgdb = outstats)
+    # for gb in ingdbs:
+    #     print(gb)
+    #     arcpy.env.workspace = gb
+    #     for i in arcpy.ListRasters('CostDis_subp*'):
+    #         arcpy.Delete_management(i)
+    inchunkgdb = ingdbs[23]
+    inyears = analysis_years
+    outgdb = outstats
+    accesscalc_chunkedir(inchunkgdb, inyears, outgdb)
 
 
     # for gb in ingdbs[2:]:

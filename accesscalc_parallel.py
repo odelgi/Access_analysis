@@ -11,6 +11,13 @@ arcpy.CheckOutExtension("Spatial")
 #   - Add logging: from multiprocessing_logging import install_mp_handler
 #   - Convert to Snakemake?
 
+#To launch:
+#If python not in environment variables
+#C;
+#cd \Python27\ArcGISx6410.7 in terminal
+#python D:\Users\odelgi\MSwork\Black_input20200402\src\accesscalc_parallel.py
+
+
 if __name__ == '__main__':
     #Define directory structure
     formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])#To update for final run
@@ -29,7 +36,7 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    maxruntime = 24*3600  # Define maximum running time of worker processes
+    maxruntime = 7*24*3600  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
