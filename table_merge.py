@@ -2,7 +2,7 @@ import arcpy
 import os
 import pandas as pd
 from collections import defaultdict
-from internal_functions import *
+from debugging_script import *
 
 formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])  # To update for final run
 resdir = os.path.join(formatdir, 'results')
