@@ -14,49 +14,17 @@ where
 # Import system modules
 import arcpy
 from arcpy.sa import *
+import numpy as np
 import os #Module for operating system operations (e.g. os.path.exists)
 import re #Module for string pattern matching
 import requests #Module to access URLs
 import pandas as pd #Module for manipulating tables (non-gis tables mostly) https://pandas.pydata.org/pandas-docs/stable/getting_started/overview.html
 from usgs import api #Module to grab landsat data
 from collections import defaultdict
+from collections import Counter
 import time
-
-#Functions
-def getfilelist(dir, repattern):
-    """Function to iteratively go through all subdirectories inside 'dir' path
-    and retrieve path for each file that matches "repattern"""
-    return [os.path.join(dirpath, file)
-            for (dirpath, dirnames, filenames) in os.walk(dir)
-            for file in filenames if re.search(repattern, file)]
-
-def pathcheckcreate(path):
-    """"Function that takes a path as input and:
-      1. Checks which directories and .gdb exist in the path
-      2. Creates the ones that don't exist"""
-
-    dirtocreate= []
-    #Loop upstream through path to check which directories exist, adding those that don't exist to dirtocreate list
-    while not os.path.exists(os.path.join(path)):
-        dirtocreate.append(os.path.split(path)[1])
-        path = os.path.split(path)[0]
-
-    dirtocreate.reverse()
-
-    #After reversing list, iterate through directories to create starting with the most upstream one
-    for dir in dirtocreate:
-        #If gdb doesn't exist yet, use arcpy method to create it and then stop the loop to prevent from trying to create anything inside it
-        if os.path.splitext(dir)[1] == '.gdb':
-            print('Create {}...'.format(dir))
-            arcpy.CreateFileGDB_management(out_folder_path=path,
-                                           out_name=dir)
-            break
-
-        #Otherwise, if it is a directory name (no extension), make a new directory
-        elif os.path.splitext(dir)[1] == '':
-            print('Create {}...'.format(dir))
-            path = os.path.join(path, dir)
-            os.mkdir(path)
+import math
+from internal_functions import *
 
 ### Set environment settings ###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
@@ -107,9 +75,13 @@ barrierweight_outdir = os.path.join(resdir,
                                     'Barrier_weighting_1_3030')
 pathcheckcreate(barrierweight_outdir)
 
-#Output buffer gdb
+#Output buffer and points gdbs
 llhoodbuffer_outdir = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb') #Output buffer path for each livelihood
 pathcheckcreate(llhoodbuffer_outdir) #Make sure that directories exist to write out buffers
+
+#Output director for HPC directories containing buffers and points to process through cost distance
+inputdir_HPC = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_HPC')
+pathcheckcreate(inputdir_HPC)
 
 #### Input variables #### 
 """Potential source of data: http://demo-ide.arsat.com.ar/ide-santiago/"""
@@ -122,8 +94,8 @@ weighting_table = os.path.join(datadir, 'Weighting_scheme.xlsx')
 
 ### Output variables ####
 basemapgdb = os.path.join(resdir,
-                           "Base_layers_Pellegrini",
-                           "Basemaps_UTM20S.gdb")
+                          "Base_layers_Pellegrini",
+                          "Basemaps_UTM20S.gdb")
 pathcheckcreate(basemapgdb)
 
 pelleUTM20S = os.path.join(basemapgdb, "Pellegri_department_outline_UTM20S")
@@ -273,7 +245,7 @@ weightingcodes = weightingmeta.loc[weightingmeta['Variable name'].str.contains("
 weightingpd = pd.read_excel(weighting_table, sheetname='Weighting_1')
 
 livelihoods = weightingpd['Livelihood'].tolist()
-
+livelihoods.remove('Combined_livelihood')
 
 barrierweight_outras = {} #Dictionary that will be populated with the path to the weighted barrier data for each livelihood-year combination
 #Iterate through the different livelihood names (as contained in the excel sheet)
@@ -310,7 +282,7 @@ for llhood in livelihoods:
             outreclas.save(barrierweight_outras[llhood+year])
 
 #------------------------------------------------------------------------------
-#Create cost distance rasters
+#Prepare data for generation of cost distance rasters
 
 #Create gdbs for cost raster
 costtab_outgdb = {}
@@ -330,16 +302,12 @@ for llhood in livelihoods:
     pathcheckcreate(access_outgdb[llhood])
 del llhood
 
-############################################## LOOP START ###############################################################
-#Iterate through the different livelihood names (as contained in the excel sheet)
-livelihoods.remove('Combined_livelihood')
-
+#LOOP: for each livelihood, assign pixels to groups so that can run non-overlapping cost distance within livelihood-specific buffer
+bufferad = {}
 for llhood in livelihoods:
     #llhood = u'Bovine_livestock'
     print(llhood)
-
-    bufferad = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
-
+    bufferad[llhood] = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
     fishout = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet{}'.format(llhood))
     arcpy.env.outputCoordinateSystem = csref
 
@@ -348,8 +316,8 @@ for llhood in livelihoods:
         arcpy.CreateFishnet_management(out_feature_class = fishout,
                                        origin_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMin),
                                        y_axis_coord = '{0} {1}'.format(pelleextent_utm.XMin, pelleextent_utm.YMax),
-                                       cell_width = (bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
-                                       cell_height = (bufferad-bufferad%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
+                                       cell_width = (bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5,
+                                       cell_height = (bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellHeight)*2 + arcpy.Describe(refraster).meanCellHeight*5,
                                        labels = 'NO_LABELS',
                                        template = pelleextent_utm,
                                        geometry_type = 'POLYGON')
@@ -359,7 +327,7 @@ for llhood in livelihoods:
                            'fishnetras{}'.format(llhood))
 
     #Change raster tile size to make sure that cell IDs are ordered within a fishnet cell
-    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad-bufferad%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
+    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
 
     if not arcpy.Exists(fishras):
         arcpy.env.extent = fishout
@@ -380,15 +348,20 @@ for llhood in livelihoods:
         ExtractMultiValuesToPoints(in_point_features=fishpoints,
                                    in_rasters= [[pelleras, "pelleoverlap"]],
                                    bilinear_interpolate_values="NONE")
+        arcpy.AlterField_management(fishpoints,
+                                    field='grid_code',
+                                    new_field_name='gc_{}'.format(llhood),
+                                    new_field_alias='gc_{}'.format(llhood))
     else:
-        print('Extract fishnet cell number to points for {}...'.format(llhood))
-        if 'grid_code' in [f.name for f in arcpy.ListFields(fishpoints)]:
-            arcpy.DeleteField_management(in_table = fishpoints, drop_field='grid_code')
-        ####################### TO DEAL WITH IT ######################################
-        ExtractMultiValuesToPoints(in_point_features=fishpoints,
-                                   in_rasters= [[fishras, 'grid_code']],
-                                   bilinear_interpolate_values="NONE")
-
+        if not 'gc_{}'.format(llhood) in [f.name for f in arcpy.ListFields(fishpoints)]:
+            print('Extract fishnet cell number to points for {}...'.format(llhood))
+            ExtractMultiValuesToPoints(in_point_features=fishpoints,
+                                       in_rasters= [[fishras, 'grid_code']],
+                                       bilinear_interpolate_values="NONE")
+            arcpy.AlterField_management(fishpoints,
+                                        field='grid_code',
+                                        new_field_name='gc_{}'.format(llhood),
+                                        new_field_alias='gc_{}'.format(llhood))
     #Assign group to each point
     print('Compute point coordinates...')
     if not ('POINT_X' in [f.name for f in arcpy.ListFields(fishpoints)]):
@@ -402,20 +375,154 @@ for llhood in livelihoods:
                                   field_type='LONG')
         groupdict = defaultdict(lambda: 1) #Create a dictionary for which key corresponds to the fishnet cell number and the default value is 1
         with arcpy.da.UpdateCursor(in_table=fishpoints,
-                                   field_names=['grid_code', 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
-                                    sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
+                                   field_names=['gc_{}'.format(llhood), 'group{}'.format(llhood), 'POINT_X', 'POINT_Y'],
+                                   sql_clause = (None, 'ORDER BY POINT_X, POINT_Y')) as cursor: #Create a cursor to query attribute table of fishpoint
             x=0
             for row in cursor: #Iterate through points first column-wise, then row-wise
                 if x % 100000 == 0: #Homemade progress bar: print row number every 100,000th row
                     print(x)
-                row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'grid_code' in fishpoints)
+                row[1] = groupdict[row[0]] #Assign to 'group{}'.format(llhood) field the dictionary value based on which fishnet cell the point is in (expressed by 'gc_llhood' in fishpoints)
                 groupdict[row[0]] +=1  #Add one to group value in dictionary for that fishnet cell (so that the next point that fall within that cell gets the same group number + 1)
                 cursor.updateRow(row) #Write value to table
                 x+=1
 
     arcpy.env.extent = pelleextent_utm
 
-#Subset points to only keep those that fall within the department of Pellegrini
+# Subset points to only keep those that fall within the department of Pellegrini
 if not arcpy.Exists(pellepoints):
-    arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr', where_clause='pelleoverlap = 0')
-    arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class= pellepoints)
+    arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr',
+                                      where_clause='pelleoverlap = 0')
+    arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class=pellepoints)
+
+########################################################################################################################
+########################################################################################################################
+
+"""
+Each job on Béluga should have a duration of at least one hour (five minutes for test jobs) 
+and a user cannot have more than 1000 jobs, running and queued, at any given moment. 
+The maximum duration for a job on Béluga is 7 days (168 hours).
+A user can access 40 cores at a time, with each core 2 x Intel Gold 6148 Skylake @ 2.4 GHz, in total 1 x SSD 480G
+
+To do:
+- In calcgroup function:
+    - Join zonal statistics results into table
+    - Benchmark intersection of buffers with pellegrini department to speed up analysis + others
+
+- Test new set up in parallel
+- Zip it all up
+"""
+# LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
+
+### ------ Add index to points, get list of groups, and run analysis on 10 groups to check speed ----- ####
+fishgroups = defaultdict(set)
+testdir = os.path.join(inputdir_HPC, 'testdir')
+pathcheckcreate(testdir)
+testgdb = os.path.join(testdir, 'test.gdb')
+pathcheckcreate(testgdb)
+grp_process_time = defaultdict(float)
+
+for llhood in livelihoods:
+    print('Assessing access calculationg run time for {}...'.format(llhood))
+    if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
+        print('Adding index to pellepoints...')
+        arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
+                                  index_name='group{}'.format(llhood))  # Add index to speed up querying
+
+    if llhood not in fishgroups:
+        print('Getting groups...')
+        fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
+
+        # Output points for 10 groups for each livelihood
+    for group in list(fishgroups[llhood])[0:5]:
+        print(group)
+
+        outpoints = os.path.join(testdir, 'testpoints_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
+        if not arcpy.Exists(outpoints):
+            # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
+            arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='subpoints{}'.format(group),
+                                              where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+            arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
+
+        # Test time that each group takes for each livelihood
+
+        inbw = {yr: barrierweight_outras['{0}{1}'.format(llhood, yr)] for yr in analysis_years}
+
+        tic = time.time()
+        # Get subpoints
+        accesscalc3(inllhood=llhood,
+                    ingroup=group,
+                    inpoints=outpoints,
+                    inbuffer_radius=bufferad[llhood],
+                    inlimits=pelleras,
+                    inyears=analysis_years,
+                    inbarrierweight_outras=inbw,
+                    inforestyearly=forestyearly,
+                    costtab_outgdb=testgdb)
+        toc = time.time()
+        print(toc - tic)
+        grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 5
+
+### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
+numcores = 40  # Number of chunks to divide processing into
+maxdays = 1 #Max number of days that processes can be run at a time
+
+#Filter groups to process based on those already processed
+processeddict = defaultdict(list)
+groupstoprocess = defaultdict(list)
+for llhood in livelihoods:
+    print(llhood)
+    #Add group for every year
+    for year in analysis_years:
+        arcpy.env.workspace = costtab_outgdb[llhood + year]
+        for tab in arcpy.ListTables():
+            processeddict[llhood].append(
+                int(re.search('(?<=w1[_])[0-9]*'.format(llhood, year), tab).group()))
+    #Only keep groups that have not been processed for all years in analysis_years
+    groupstoprocess[llhood] = [g for g in fishgroups[llhood] if not \
+        Counter(processeddict[llhood])[g] == len(analysis_years)]
+
+#Assess amount of time reguired and number of chunks
+totaltime = sum([grp_process_time[llhood] * len(groupstoprocess[llhood]) for llhood in livelihoods])
+print('Total processing times among {0} cores: {1} days...'.format(
+    numcores, totaltime/float(3600*24*numcores))) #Total time if process is divided into numcores chunks at same speed
+numchunks = math.ceil(totaltime / float(3600 * 24 * maxdays))
+print('Total number of chunks for each to be processed within {0} days among {1} cores: {2}...'.format(
+    maxdays, numcores, numchunks))
+
+### ------ Assign groups to chunks ------###
+llhood_chunks = {}
+formatdir = os.path.join(inputdir_HPC, 'Beluga_input{}'.format(time.strftime("%Y%m%d")))
+formatdir_data = os.path.join(formatdir, 'data')
+formatdir_results = os.path.join(formatdir, 'results')
+pathcheckcreate(formatdir_data, verbose=True)
+pathcheckcreate(formatdir_results, verbose=True)
+
+for llhood in livelihoods:
+    print(llhood)
+    llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(groupstoprocess[llhood]) / totaltime)
+    print('    Number of daily-core chunks to divide {0} groups into: {1}...'.format(
+        llhood, llhood_chunks[llhood]))
+
+    groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
+
+    #Output points and ancillary data to chunk-specific gdb
+    for chunk in range(0, len(groupchunklist)):
+        print(chunk)
+        outchunkgdb = os.path.join(formatdir_data, '{0}{1}_{2}.gdb'.format(llhood, int(bufferad[llhood]), chunk))
+        pathcheckcreate(outchunkgdb, verbose=True)
+        outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}_{2}'.format(llhood, int(bufferad[llhood]), chunk))
+
+        print('Copying points...')
+        arcpy.CopyFeatures_management(
+            arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='pointslyr',
+                                              where_clause='group{0} IN {1}'.format(llhood,tuple(groupchunklist[chunk]))),
+            outchunkpoints)
+
+        print('Copying ancillary data...')
+        for yr in analysis_years:
+            #Copy barrier raster
+            arcpy.CopyRaster_management(barrierweight_outras[llhood + yr],
+                                        os.path.join(outchunkgdb, os.path.split(barrierweight_outras[llhood + yr])[1]))
+            #Copy forest cover
+            arcpy.CopyRaster_management(forestyearly[yr],
+                                        os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
