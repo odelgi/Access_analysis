@@ -2,30 +2,39 @@ import arcpy
 import os
 import pandas as pd
 from collections import defaultdict
-from internal_functions import *
+from debugging_script import *
 
 formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])  # To update for final run
 resdir = os.path.join(formatdir, 'results')
 outstats = os.path.join(resdir, 'outstats.gdb')
+outmerge = os.path.join(resdir, 'outstats_merge.gdb')
+pathcheckcreate(outmerge)
 
-tablist = getfilelist(outstats, '*')
-tables_pd = pd.concat(pd.Series(tablist),
-                      pd.Series(tablist).str.split('_', expand=True),
+#Get panda df of tables
+tablist = getfilelist(outstats)
+tables_pd = pd.concat([pd.Series(tablist),
+                      pd.Series(tablist).str.split('_', expand=True)],
                       axis=1)
-tables_pd.columns = ['path', 'llhood', 'year', 'weighting', 'group']
+tables_pd.columns = ['path', 'dataset', 'llhood1', 'llhood2', 'year', 'weighting', 'group']
+
+#
+
+def tabmerge_dict(tablist):
+    outdict = {}
+    for tab in tablist:
+        print(tab)
+        for row in arcpy.da.SearchCursor(tab, ['pointid', 'MEAN']):
+            outdict[row[0]] = row[1]
+
+for llhood in tables_pd['llhood1'].unique():
+    for year in tables_pd['year'].unique():
+        print len()
+        tabmerge_dict(tablist)
 
 
 
-# Process: Merge tables and join to points (within loop)
-for year in analysis_years:
-    print(year)
-    accessdict = {}
-    for dirpath, dirnames, filenames in arcpy.da.Walk(costtab_outgdb[llhood + year],
-                                                      datatype="Table"):  # Retrieve the names of all tables in livelihood-specific access geodatabase
-        for tab in [os.path.join(dirpath, f) for f in filenames]:
-            print(tab)
-            for row in arcpy.da.SearchCursor(tab, ['pointid', 'MEAN']):
-                accessdict[row[0]] = row[1]
+
+
 
     outfield = 'access{0}{1}'.format(llhood, year)
     if not outfield in [f.name for f in arcpy.ListFields(
