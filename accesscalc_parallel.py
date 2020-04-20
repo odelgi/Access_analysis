@@ -34,20 +34,20 @@ def getfilelist(dir, repattern=None):
         if arcpy.Describe(dir).dataType == 'Workspace':
             print('{} is ArcGIS workspace...'.format(dir))
             arcpy.env.workspace = dir
-            filenames = (arcpy.ListDatasets() or []) + (arcpy.ListTables() or []) #Either LisDatsets or ListTables may return None so need to create empty list alternative
+            filenames_list = (arcpy.ListDatasets() or []) + (arcpy.ListTables() or []) #Either LisDatsets or ListTables may return None so need to create empty list alternative
             if not repattern==None:
-                filenames = [os.path.join(dir, filen)
-                             for filen in filenames if re.search(repattern, filen)]
+                filenames_list = [os.path.join(dir, filen)
+                             for filen in filenames_list if re.search(repattern, filen)]
             arcpy.ClearEnvironment('workspace')
         else:
-            filenames = []
+            filenames_list = []
             for (dirpath, dirnames, filenames) in os.walk(dir):
                 for file in filenames:
                     if repattern is None:
-                        filenames.append(os.path.join(dirpath, file))
+                        filenames_list.append(os.path.join(dirpath, file))
                     else:
                         if re.search(repattern, file):
-                            filenames.append(os.path.join(dirpath, file))
+                            filenames_list.append(os.path.join(dirpath, file))
         return(filenames)
 
     # Return geoprocessing specific errors
@@ -88,21 +88,6 @@ def pathcheckcreate(path, verbose=True):
                 print('Create {}...'.format(dir))
             path = os.path.join(path, dir)
             os.mkdir(path)
-
-def groupindexing(grouplist, chunknum):
-    # Set of groups
-    # Chunk size to divide groups into
-    x = np.array(grouplist)
-    bin_step = max(grouplist) / chunknum
-    bin_edges = np.arange(min(grouplist),
-                          max(grouplist) + bin_step,
-                          bin_step)
-    bin_number = bin_edges.size - 1
-    cond = np.zeros((x.size, bin_number), dtype=bool)
-    for i in range(bin_number):
-        cond[:, i] = np.logical_and(bin_edges[i] <= x,
-                                    x < bin_edges[i + 1])
-    return [list(x[cond[:, i]]) for i in range(bin_number)]
 
 def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierweight_outras,
                inforestyearly, costtab_outdir):

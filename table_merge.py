@@ -20,7 +20,7 @@ if __name__ == 'main':
     pathcheckcreate(outmerge)
 
     #Get panda df of tables
-    #tablist = getfilelist(resdir, '.*[.]dbf')
+    tablist = getfilelist(resdir, '.*[.]dbf')
     arcpy.env.workspace = resdir
     tablist = arcpy.ListTables(table_type='dBASE')
 

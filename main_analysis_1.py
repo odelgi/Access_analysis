@@ -24,7 +24,23 @@ from collections import defaultdict
 from collections import Counter
 import time
 import math
-from internal_functions import *
+from accesscalc_parallel import *
+
+#Define function
+def groupindexing(grouplist, chunknum):
+    # Set of groups
+    # Chunk size to divide groups into
+    x = np.array(grouplist)
+    bin_step = max(grouplist) / chunknum
+    bin_edges = np.arange(min(i for i in grouplist if i is not None),
+                          max(i for i in grouplist if i is not None) + bin_step,
+                          bin_step)
+    bin_number = bin_edges.size - 1
+    cond = np.zeros((x.size, bin_number), dtype=bool)
+    for i in range(bin_number):
+        cond[:, i] = np.logical_and(bin_edges[i] <= x,
+                                    x < bin_edges[i + 1])
+    return [list(x[cond[:, i]]) for i in range(bin_number)]
 
 ### Set environment settings ###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
@@ -149,7 +165,7 @@ for year in landsat_years:
                                        resampling_type='NEAREST')
 
 
-### Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat) ### 
+### Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat) ###
 if not arcpy.Exists(pelleUTM20S):
     print('Projecting study area polygon...')
     arcpy.Project_management(in_dataset=pelleoutline,
@@ -178,7 +194,7 @@ for product in ['datamask', 'gain', 'lossyear', 'treecover2000']:
     GFCout = os.path.join(forestdir, 'Hansen_GFC_v16_{}.tif'.format(product))
 
     if not os.path.exists(GFCout):
-        print "downloading {}".format(GFCURL)
+        print("downloading {}".format(GFCURL))
         with open(GFCout, "wb") as local_file:
             local_file.write(requests.get(GFCURL, stream=True).content)
     else:
@@ -188,7 +204,7 @@ for product in ['datamask', 'gain', 'lossyear', 'treecover2000']:
 
     #Project to UTM 20S
     if not arcpy.Exists(GFCoutproj):
-        print "projecting {}".format(GFCout)
+        print("projecting {}".format(GFCout))
         arcpy.ProjectRaster_management(in_raster=GFCout,
                                        out_raster= GFCoutproj,
                                        out_coor_system = csref,
@@ -198,7 +214,7 @@ for product in ['datamask', 'gain', 'lossyear', 'treecover2000']:
     #Clip to study area
     GFCoutclip[product] = os.path.join(forestoutdir, 'Hansen_GFC_v16_{}clip'.format(product))
     if not arcpy.Exists(GFCoutclip[product]):
-        print "clipping {}".format(GFCoutclip[product])
+        print("clipping {}".format(GFCoutclip[product]))
         ExtractByMask(in_raster=GFCoutproj,
                       in_mask_data=pelleras).save(GFCoutclip[product])
 
@@ -413,12 +429,10 @@ To do:
 """
 # LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
 
-### ------ Add index to points, get list of groups, and run analysis on 10 groups to check speed ----- ####
+### ------ Add index to points, get list of groups, and run analysis on 20 groups to check speed ----- ####
 fishgroups = defaultdict(set)
 testdir = os.path.join(inputdir_HPC, 'testdir')
 pathcheckcreate(testdir)
-testgdb = os.path.join(testdir, 'test.gdb')
-pathcheckcreate(testgdb)
 grp_process_time = defaultdict(float)
 
 for llhood in livelihoods:
@@ -433,7 +447,7 @@ for llhood in livelihoods:
         fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
         # Output points for 10 groups for each livelihood
-    for group in list(fishgroups[llhood])[0:5]:
+    for group in list(fishgroups[llhood])[0:9]:
         print(group)
 
         outpoints = os.path.join(testdir, 'testpoints_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
@@ -449,22 +463,21 @@ for llhood in livelihoods:
 
         tic = time.time()
         # Get subpoints
-        accesscalc3(inllhood=llhood,
+        accesscalc(inllhood=llhood,
                     ingroup=group,
                     inpoints=outpoints,
                     inbuffer_radius=bufferad[llhood],
-                    inlimits=pelleras,
                     inyears=analysis_years,
                     inbarrierweight_outras=inbw,
                     inforestyearly=forestyearly,
-                    costtab_outgdb=testgdb)
+                    costtab_outdir=testdir)
         toc = time.time()
         print(toc - tic)
         grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 5
 
 ### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
-numcores = 40  # Number of chunks to divide processing into
-maxdays = 1 #Max number of days that processes can be run at a time
+numcores = 4  # Number of chunks to divide processing into
+maxdays = 4 #Max number of days that processes can be run at a time
 
 #Filter groups to process based on those already processed
 processeddict = defaultdict(list)
@@ -477,6 +490,12 @@ for llhood in livelihoods:
         for tab in arcpy.ListTables():
             processeddict[llhood].append(
                 int(re.search('(?<=w1[_])[0-9]*'.format(llhood, year), tab).group()))
+
+        arcpy.env.workspace = os.path.split(costtab_outgdb[llhood + year])[0]
+        for tab in arcpy.ListTables():
+            processeddict[llhood].append(
+                int(re.search('(?<=w1[_])[0-9]*(?=[.]dbf)'.format(llhood, year), tab).group()))
+
     #Only keep groups that have not been processed for all years in analysis_years
     groupstoprocess[llhood] = [g for g in fishgroups[llhood] if not \
         Counter(processeddict[llhood])[g] == len(analysis_years)]
@@ -491,7 +510,7 @@ print('Total number of chunks for each to be processed within {0} days among {1}
 
 ### ------ Assign groups to chunks ------###
 llhood_chunks = {}
-formatdir = os.path.join(inputdir_HPC, 'Beluga_input{}'.format(time.strftime("%Y%m%d")))
+formatdir = os.path.join(inputdir_HPC, 'Black_input{}'.format(time.strftime("%Y%m%d")))
 formatdir_data = os.path.join(formatdir, 'data')
 formatdir_results = os.path.join(formatdir, 'results')
 pathcheckcreate(formatdir_data, verbose=True)
@@ -500,7 +519,7 @@ pathcheckcreate(formatdir_results, verbose=True)
 for llhood in livelihoods:
     print(llhood)
     llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(groupstoprocess[llhood]) / totaltime)
-    print('    Number of daily-core chunks to divide {0} groups into: {1}...'.format(
+    print('    Number of chunks to divide {0} groups into: {1}...'.format(
         llhood, llhood_chunks[llhood]))
 
     groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
@@ -509,6 +528,8 @@ for llhood in livelihoods:
     for chunk in range(0, len(groupchunklist)):
         print(chunk)
         outchunkgdb = os.path.join(formatdir_data, '{0}{1}_{2}.gdb'.format(llhood, int(bufferad[llhood]), chunk))
+        if (arcpy.Exists(outchunkgdb)):
+            arcpy.Delete_management(outchunkgdb)
         pathcheckcreate(outchunkgdb, verbose=True)
         outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}_{2}'.format(llhood, int(bufferad[llhood]), chunk))
 
@@ -524,5 +545,6 @@ for llhood in livelihoods:
             arcpy.CopyRaster_management(barrierweight_outras[llhood + yr],
                                         os.path.join(outchunkgdb, os.path.split(barrierweight_outras[llhood + yr])[1]))
             #Copy forest cover
-            arcpy.CopyRaster_management(forestyearly[yr],
-                                        os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
+            if llhood == 'Charcoal_production':
+                arcpy.CopyRaster_management(forestyearly[yr],
+                                            os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
