@@ -118,7 +118,7 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
                               dissolve_option='NONE',
                               method='PLANAR')
 
-        templateras = inforestyearly[inyears[0]]
+        templateras = inbarrierweight_outras[inyears[0]]
         arcpy.env.SnapRaster = templateras
         buffras_memory = r'in_memory/subbufferas{}'.format(ingroup)
         #print('Conversion to raster...')
