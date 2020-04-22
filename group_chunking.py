@@ -11,6 +11,22 @@ import pandas as pd
 import math
 from accesscalc_parallel import *
 
+#Define function
+def groupindexing(grouplist, chunknum):
+    # Set of groups
+    # Chunk size to divide groups into
+    x = np.array(grouplist)
+    bin_step = max(grouplist) / chunknum
+    bin_edges = np.arange(min(i for i in grouplist if i is not None),
+                          max(i for i in grouplist if i is not None) + bin_step,
+                          bin_step)
+    bin_number = bin_edges.size - 1
+    cond = np.zeros((x.size, bin_number), dtype=bool)
+    for i in range(bin_number):
+        cond[:, i] = np.logical_and(bin_edges[i] <= x,
+                                    x < bin_edges[i + 1])
+    return [list(x[cond[:, i]]) for i in range(bin_number)]
+
 ### Set environment settings ###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
 arcpy.env.overwriteOutput = 'True'
@@ -77,7 +93,7 @@ for llhood in livelihoods:
         fishgroups[llhood] = {row[0] for row in arcpy.da.SearchCursor(pellepoints, 'group{}'.format(llhood))}
 
         # Output points for 10 groups for each livelihood
-    for group in list(fishgroups[llhood])[0:9]:
+    for group in list(fishgroups[llhood])[0:10]:
         print(group)
 
         outpoints = os.path.join(testdir, 'testpoints_{0}_{1}_{2}.shp').format(llhood, int(bufferad[llhood]), group)
@@ -103,7 +119,7 @@ for llhood in livelihoods:
                     costtab_outdir=testdir)
         toc = time.time()
         print(toc - tic)
-        grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 5
+        grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 10
 
 ### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
 numcores = 4  # Number of chunks to divide processing into
@@ -127,7 +143,7 @@ processed_pd = tables_pd.groupby(['llhood', 'group']).filter(lambda x: x['year']
 #Filter groups to process based on those already processed
 groupstoprocess = defaultdict(list)
 for llhood in livelihoods:
-    subprocessed_set = set(processed_pd.loc[processed_pd['llhood'] == llhood]['group'])
+    subprocessed_set = set(processed_pd.loc[processed_pd['llhood'] == llhood]['group'].astype('int'))
     #Only keep groups that have not been processed for all years in analysis_years
     groupstoprocess[llhood] = {g for g in fishgroups[llhood] if g not in subprocessed_set}
 

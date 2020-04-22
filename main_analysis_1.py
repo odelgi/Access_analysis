@@ -26,22 +26,6 @@ import time
 import math
 from accesscalc_parallel import *
 
-#Define function
-def groupindexing(grouplist, chunknum):
-    # Set of groups
-    # Chunk size to divide groups into
-    x = np.array(grouplist)
-    bin_step = max(grouplist) / chunknum
-    bin_edges = np.arange(min(i for i in grouplist if i is not None),
-                          max(i for i in grouplist if i is not None) + bin_step,
-                          bin_step)
-    bin_number = bin_edges.size - 1
-    cond = np.zeros((x.size, bin_number), dtype=bool)
-    for i in range(bin_number):
-        cond[:, i] = np.logical_and(bin_edges[i] <= x,
-                                    x < bin_edges[i + 1])
-    return [list(x[cond[:, i]]) for i in range(bin_number)]
-
 ### Set environment settings ###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
 arcpy.env.overwriteOutput = 'True'
