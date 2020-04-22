@@ -26,29 +26,47 @@ arcpy.CheckOutExtension("Spatial")
 #   python D:\Users\odelgi\MSwork\Black_input20200402\src\accesscalc_parallel.py
 
 # Functions
-def getfilelist(dir, repattern=None):
+def getwkspfiles(dir, repattern):
+    arcpy.env.workspace = dir
+    filenames_list = (arcpy.ListDatasets() or []) + (
+            arcpy.ListTables() or [])  # Either LisDatsets or ListTables may return None so need to create empty list alternative
+    if not repattern == None:
+        filenames_list = [os.path.join(dir, filen)
+                          for filen in filenames_list if re.search(repattern, filen)]
+    return(filenames_list)
+    arcpy.ClearEnvironment('workspace')
+
+def getfilelist(dir, repattern=None, gdbf = True, nongdbf = True):
     """Function to iteratively go through all subdirectories inside 'dir' path
     and retrieve path for each file that matches "repattern"
     If the provided path is an ArcGIS workspace"""
     try:
         if arcpy.Describe(dir).dataType == 'Workspace':
-            print('{} is ArcGIS workspace...'.format(dir))
-            arcpy.env.workspace = dir
-            filenames_list = (arcpy.ListDatasets() or []) + (arcpy.ListTables() or []) #Either LisDatsets or ListTables may return None so need to create empty list alternative
-            if not repattern==None:
-                filenames_list = [os.path.join(dir, filen)
-                             for filen in filenames_list if re.search(repattern, filen)]
-            arcpy.ClearEnvironment('workspace')
+            if gdbf == True:
+                print('{} is ArcGIS workspace...'.format(dir))
+                getwkspfiles(dir, repattern)
+            else:
+                raise ValueError("A gdb workspace was given for dir but gdbf=False... either change dir or set gdbf to True")
         else:
             filenames_list = []
-            for (dirpath, dirnames, filenames) in os.walk(dir):
-                for file in filenames:
-                    if repattern is None:
-                        filenames_list.append(os.path.join(dirpath, file))
-                    else:
-                        if re.search(repattern, file):
+
+            if gdbf == True:
+                for (dirpath, dirnames, filenames) in os.walk(dir):
+                    for in_dir in dirnames:
+                        fpath = os.path.join(dirpath, in_dir)
+                        if arcpy.Describe(fpath).dataType == 'Workspace':
+                            print('{} is ArcGIS workspace...'.format(fpath))
+                            filenames_list.extend(getwkspfiles(dir=fpath, repattern=repattern))
+
+            if nongdbf == True:
+                for (dirpath, dirnames, filenames) in os.walk(dir):
+                    for file in filenames:
+                        if repattern is None:
                             filenames_list.append(os.path.join(dirpath, file))
-        return(filenames)
+                        else:
+                            if re.search(repattern, file):
+                                filenames_list.append(os.path.join(dirpath, file))
+        return(filenames_list)
 
     # Return geoprocessing specific errors
     except arcpy.ExecuteError:
@@ -234,7 +252,7 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    maxruntime = 7*24*3600  # Define maximum running time of worker processes
+    maxruntime = 8*24*3600  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
