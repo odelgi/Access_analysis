@@ -1,5 +1,6 @@
 import os
 import sys
+import gc
 import traceback
 import re
 import arcpy
@@ -163,7 +164,9 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
                 del tempaccessdict[dictkey]
             except:
                 pass
+
         arcpy.ClearEnvironment("mask")
+        arcpy.Delete_management(buffras_memory)
         arcpy.Delete_management("in_memory")
         del tempaccessdict
 
@@ -225,6 +228,11 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outdir):
             #print(time.time() - tic)
         else:
             print('Group {} was already analyzed...'.format(group))
+
+        gc.collect()
+
+    del grouplist
+    arcpy.Delete_management("in_memory")
     arcpy.ClearEnvironment('workspace')
 
 def task_done(future):
