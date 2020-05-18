@@ -24,7 +24,8 @@ arcpy.CheckOutExtension("Spatial")
 #   If python not in environment variables, in terminal:
 #   C;
 #   cd \Python27\ArcGISx6410.7
-#   python D:\Users\odelgi\MSwork\Black_input20200402\src\accesscalc_parallel.py
+#   python D:\Users\odelgi\MSwork\Black_input20200402\src\accesscalc_parallel.py #for black
+#   python C:\Users\odelgi\White_input20200518\src\accesscalc_parallel.py
 
 # Functions
 def getwkspfiles(dir, repattern):
@@ -201,6 +202,10 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outdir):
     forestyearly = {year: 'Hansen_GFC_v16_treecover{}'.format(year) for year in inyears}
     print(rootname)
 
+    outdir_chunk = os.path.join(outdir, rootname)
+    if not os.path.exists(outdir_chunk):
+        os.mkdir(outdir_chunk)
+
     if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(inpoints).indexes]:
         arcpy.AddIndex_management(inpoints, fields='group{}'.format(llhood),
                                   index_name='group{}'.format(llhood))  # Add index to speed up querying
@@ -209,7 +214,7 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outdir):
     grouplist = {row[0] for row in arcpy.da.SearchCursor(inpoints, 'group{}'.format(llhood))}
     for group in grouplist:
         #If all output tables don't already exist
-        if not all(arcpy.Exists(os.path.join(outdir, 'CD_{0}_{1}_w1_{2}.dbf'.format(llhood, year, group)))
+        if not all(arcpy.Exists(os.path.join(outdir_chunk, 'CD_{0}_{1}_w1_{2}.dbf'.format(llhood, year, group)))
                    for year in inyears):
             print(group)
             #tic = time.time()
@@ -222,7 +227,7 @@ def accesscalc_chunkedir(inchunkgdb, inyears, outdir):
                        inyears=inyears,
                        inbarrierweight_outras=barrierweight_outras,
                        inforestyearly=forestyearly,
-                       costtab_outdir=outdir)
+                       costtab_outdir=outdir_chunk)
 
             arcpy.Delete_management('pointslyr_{}'.format(group))
             #print(time.time() - tic)
@@ -260,13 +265,13 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    maxruntime = 8*24*3600  # Define maximum running time of worker processes
+    maxruntime = 1*24*3600  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
         #Assign chunked gdbs to worker processes, keeping analysis years and outstats arguments constant with 'partial'
         future = pool.map(partial(accesscalc_chunkedir, inyears=analysis_years, outdir=resdir),
                           ingdbs,
-                          chunksize=int(0.5 + len(ingdbs) / float(ncpus)),  # Divide all gdbs among chunks upfront so that timeout doesn't lead to new worker process
+                          #chunksize=int(0.5 + len(ingdbs) / float(ncpus)),  # Divide all gdbs among chunks upfront so that timeout doesn't lead to new worker process
                           timeout=maxruntime) #Raise timeout error after maxruntime
         task_done(future) #Return timeout error

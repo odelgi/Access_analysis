@@ -3,6 +3,7 @@ import arcpy
 from arcpy.sa import *
 import numpy as np
 import os #Module for operating system operations (e.g. os.path.exists)
+from shutil import copyfile
 import re #Module for string pattern matching
 from collections import defaultdict
 from collections import Counter
@@ -82,7 +83,7 @@ pathcheckcreate(testdir)
 grp_process_time = defaultdict(float)
 
 for llhood in livelihoods:
-    print('Assessing access calculationg run time for {}...'.format(llhood))
+    print('Assessing access calculation run time for {}...'.format(llhood))
     if 'group{}'.format(llhood) not in [i.name for i in arcpy.Describe(pellepoints).indexes]:
         print('Adding index to pellepoints...')
         arcpy.AddIndex_management(pellepoints, fields='group{}'.format(llhood),
@@ -122,8 +123,8 @@ for llhood in livelihoods:
         grp_process_time[llhood] = grp_process_time[llhood] + (toc - tic) / 10
 
 ### ------ Compute number of chunks to divide each livelihood in to process each chunk with equal time ------###
-numcores = 4  # Number of chunks to divide processing into
-maxdays = 4 #Max number of days that processes can be run at a time
+numcores = 14  # Number of chunks to divide processing into
+maxdays = 1 #Max number of days that processes can be run at a time
 
 #Get all processed tables
 tablist = getfilelist(dir=outstats, repattern=".*[.]dbf$", gdbf = False, nongdbf = True)
@@ -157,41 +158,53 @@ print('Total number of chunks for each to be processed within {0} days among {1}
 
 ### ------ Assign groups to chunks ------###
 llhood_chunks = {}
-formatdir = os.path.join(inputdir_HPC, 'Black_input{}'.format(time.strftime("%Y%m%d")))
+formatdir = os.path.join(inputdir_HPC, 'White_input{}'.format(time.strftime("%Y%m%d")))
 formatdir_data = os.path.join(formatdir, 'data')
 formatdir_results = os.path.join(formatdir, 'results')
+formatdir_src = os.path.join(formatdir, 'src')
 pathcheckcreate(formatdir_data, verbose=True)
 pathcheckcreate(formatdir_results, verbose=True)
+pathcheckcreate(formatdir_src, verbose=True)
+
+#Copy processing file to directory
+in_processingscript = os.path.join(rootdir, 'src', 'Chap1_Analysis1', 'accesscalc_parallel.py')
+out_processingscript = os.path.join(formatdir_src, 'accesscalc_parallel.py')
+copyfile(in_processingscript, out_processingscript)
 
 for llhood in livelihoods:
-    print(llhood)
-    llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(groupstoprocess[llhood]) / totaltime)
-    print('    Number of chunks to divide {0} groups into: {1}...'.format(
-        llhood, llhood_chunks[llhood]))
+    if len(groupstoprocess[llhood]) > 0:
+        print(llhood)
+        llhood_chunks[llhood] = math.ceil(numchunks * grp_process_time[llhood] * len(groupstoprocess[llhood]) / totaltime)
+        print('    Number of chunks to divide {0} groups into: {1}...'.format(
+            llhood, llhood_chunks[llhood]))
 
-    groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
+        groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
 
-    #Output points and ancillary data to chunk-specific gdb
-    for chunk in range(0, len(groupchunklist)):
-        print(chunk)
-        outchunkgdb = os.path.join(formatdir_data, '{0}{1}_{2}.gdb'.format(llhood, int(bufferad[llhood]), chunk))
-        if (arcpy.Exists(outchunkgdb)):
-            arcpy.Delete_management(outchunkgdb)
-        pathcheckcreate(outchunkgdb, verbose=True)
-        outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}_{2}'.format(llhood, int(bufferad[llhood]), chunk))
+        #Output points and ancillary data to chunk-specific gdb
+        for chunk in range(0, len(groupchunklist)):
+            print(chunk)
+            outchunkgdb = os.path.join(formatdir_data, '{0}{1}_{2}.gdb'.format(llhood, int(bufferad[llhood]), chunk))
+            if not (arcpy.Exists(outchunkgdb)):
+                pathcheckcreate(outchunkgdb, verbose=True)
+                outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}_{2}'.format(llhood, int(bufferad[llhood]), chunk))
 
-        print('Copying points...')
-        arcpy.CopyFeatures_management(
-            arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='pointslyr',
-                                              where_clause='group{0} IN {1}'.format(llhood,tuple(groupchunklist[chunk]))),
-            outchunkpoints)
+                print('Copying points...')
+                if len(groupchunklist[chunk])>0:
+                    arcpy.CopyFeatures_management(
+                        arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='pointslyr',
+                                                          where_clause='group{0} IN {1}'.format(llhood,tuple(groupchunklist[chunk]))),
+                        outchunkpoints)
 
-        print('Copying ancillary data...')
-        for yr in analysis_years:
-            #Copy barrier raster
-            arcpy.CopyRaster_management(barrierweight_outras[llhood + yr],
-                                        os.path.join(outchunkgdb, os.path.split(barrierweight_outras[llhood + yr])[1]))
-            #Copy forest cover
-            if llhood == 'Charcoal_production':
-                arcpy.CopyRaster_management(forestyearly[yr],
-                                            os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
+                    print('Copying ancillary data...')
+                    for yr in analysis_years:
+                        #Copy barrier raster
+                        arcpy.CopyRaster_management(barrierweight_outras[llhood + yr],
+                                                    os.path.join(outchunkgdb, os.path.split(barrierweight_outras[llhood + yr])[1]))
+                        #Copy forest cover
+                        if llhood == 'Charcoal_production':
+                            arcpy.CopyRaster_management(forestyearly[yr],
+                                                        os.path.join(outchunkgdb, os.path.split(forestyearly[yr])[1]))
+            else:
+                print('{} already exists...'.format(outchunkgdb))
+    else:
+        print('All groups for {} have already been processed...'.format(llhood))
