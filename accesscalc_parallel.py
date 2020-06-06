@@ -265,7 +265,7 @@ if __name__ == '__main__':
         os.environ.get('SLURM_CPUS_PER_TASK') is not None else \
         psutil.cpu_count(logical=False)
 
-    maxruntime = 1*24*3600  # Define maximum running time of worker processes
+    maxruntime = 7*24*3600  # Define maximum running time of worker processes
 
     print('Launch parallel processing on {0} cores with {1}s timeout...'.format(ncpus, maxruntime))
     with ProcessPool(max_workers=ncpus) as pool:  # Create pool of worker processes (with N # of physical cores)
