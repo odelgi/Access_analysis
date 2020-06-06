@@ -151,8 +151,8 @@ for llhood in livelihoods:
 #Assess amount of time reguired and number of chunks
 totaltime = sum([grp_process_time[llhood] * len(groupstoprocess[llhood]) for llhood in livelihoods])
 print('Total processing times among {0} cores: {1} days...'.format(
-    numcores, totaltime/float(3600*24*numcores))) #Total time if process is divided into numcores chunks at same speed
-numchunks = math.ceil(totaltime / float(3600 * 24 * maxdays))
+    numcores, totaltime/float(3600.0*24*numcores))) #Total time if process is divided into numcores chunks at same speed
+numchunks = math.ceil(totaltime / float(3600.0 * 24 * maxdays))
 print('Total number of chunks for each to be processed within {0} days among {1} cores: {2}...'.format(
     maxdays, numcores, numchunks))
 
@@ -178,7 +178,10 @@ for llhood in livelihoods:
         print('    Number of chunks to divide {0} groups into: {1}...'.format(
             llhood, llhood_chunks[llhood]))
 
-        groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
+        #groupchunklist = groupindexing(grouplist=list(groupstoprocess[llhood]), chunknum=llhood_chunks[llhood])
+        interval = int(math.ceil(len(groupstoprocess[llhood])/ float(numchunks)))
+        groupchunklist = [list(groupstoprocess[llhood])[i:(i + interval)] for i
+                   in range(0, len(groupstoprocess[llhood]), interval)]
 
         #Output points and ancillary data to chunk-specific gdb
         for chunk in range(0, len(groupchunklist)):
@@ -190,9 +193,12 @@ for llhood in livelihoods:
 
                 print('Copying points...')
                 if len(groupchunklist[chunk])>0:
+                    print(len(groupchunklist[chunk]))
                     arcpy.CopyFeatures_management(
-                        arcpy.MakeFeatureLayer_management(in_features=pellepoints, out_layer='pointslyr',
-                                                          where_clause='group{0} IN {1}'.format(llhood,tuple(groupchunklist[chunk]))),
+                        arcpy.MakeFeatureLayer_management(
+                            in_features=pellepoints, out_layer='pointslyr',
+                            where_clause='group{0} IN {1}'.format(llhood,tuple(
+                                [i for i in groupchunklist[chunk] if i is not None]))),
                         outchunkpoints)
 
                     print('Copying ancillary data...')
