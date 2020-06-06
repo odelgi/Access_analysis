@@ -197,8 +197,7 @@ for llhood in livelihoods:
                     arcpy.CopyFeatures_management(
                         arcpy.MakeFeatureLayer_management(
                             in_features=pellepoints, out_layer='pointslyr',
-                            where_clause='group{0} IN {1}'.format(llhood,tuple(
-                                [i for i in groupchunklist[chunk] if i is not None]))),
+                            where_clause='group{0} IN {1}'.format(llhood,tuple(groupchunklist[chunk]))), #[i for i in groupchunklist[chunk] if i is not None]
                         outchunkpoints)
 
                     print('Copying ancillary data...')
