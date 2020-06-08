@@ -28,27 +28,28 @@ arcpy.CheckOutExtension("Spatial")
 #   python C:\Users\odelgi\White_input20200518\src\accesscalc_parallel.py
 
 # Functions
-def getwkspfiles(dir, repattern):
+#Get all files in a ArcGIS workspace (file or personal GDB)
+def getwkspfiles(dir, repattern=None):
     arcpy.env.workspace = dir
-    filenames_list = (arcpy.ListDatasets() or []) + (
-            arcpy.ListTables() or [])  # Either LisDatsets or ListTables may return None so need to create empty list alternative
+    filenames_list = (arcpy.ListDatasets() or []) + (arcpy.ListTables() or [])  # Either LisDatsets or ListTables may return None so need to create empty list alternative
     if not repattern == None:
-        filenames_list = [os.path.join(dir, filen)
-                          for filen in filenames_list if re.search(repattern, filen)]
-    return(filenames_list)
+        filenames_list = [filen for filen in filenames_list if re.search(repattern, filen)]
+    return ([os.path.join(dir, filen) for filen in filenames_list])
     arcpy.ClearEnvironment('workspace')
 
-def getfilelist(dir, repattern=None, gdbf = True, nongdbf = True):
+def getfilelist(dir, repattern=None, gdbf=True, nongdbf=True):
     """Function to iteratively go through all subdirectories inside 'dir' path
     and retrieve path for each file that matches "repattern"
-    If the provided path is an ArcGIS workspace"""
+    gdbf and nongdbf allows the user to choose whether to consider ArcGIS workspaces (GDBs) or not or exclusively"""
+
     try:
         if arcpy.Describe(dir).dataType == 'Workspace':
             if gdbf == True:
                 print('{} is ArcGIS workspace...'.format(dir))
-                getwkspfiles(dir, repattern)
+                filenames_list = getwkspfiles(dir, repattern)
             else:
-                raise ValueError("A gdb workspace was given for dir but gdbf=False... either change dir or set gdbf to True")
+                raise ValueError(
+                    "A gdb workspace was given for dir but gdbf=False... either change dir or set gdbf to True")
         else:
             filenames_list = []
 
@@ -68,7 +69,7 @@ def getfilelist(dir, repattern=None, gdbf = True, nongdbf = True):
                         else:
                             if re.search(repattern, file):
                                 filenames_list.append(os.path.join(dirpath, file))
-        return(filenames_list)
+        return (filenames_list)
 
     # Return geoprocessing specific errors
     except arcpy.ExecuteError:
@@ -140,14 +141,19 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
                 #print(year)
                 # Compute cost distance and access
                 if inllhood == 'Charcoal_production':
-                    # forest resource weighting*(1/(1+cost))
-                    tempaccessdict[dictkey] = Int(100 * Raster(inforestyearly[year]) * \
-                                    (1 / (1 + CostDistance(in_source_data=inpoints,
-                                                           in_cost_raster=inbarrierweight_outras[year]))))
+                    # Round(100*forest resource weighting*(1/(1+cost))
+                    tempaccessdict[dictkey] = \
+                        Int(100 * Raster(inforestyearly[year]) * \
+                            (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                   in_cost_raster=Raster(inbarrierweight_outras[year])+0.0001))) +
+                            0.5)
                 else:
-                    # (1/(1+cost))
-                    tempaccessdict[dictkey] = Int(100 * (1 / (1 + CostDistance(in_source_data=inpoints,
-                                                                 in_cost_raster=inbarrierweight_outras[year]))))
+                    # Round(100*(1/(1+cost))
+                    tempaccessdict[dictkey] = \
+                        Int(100 * \
+                            (1 / (1 + CostDistance(in_source_data=inpoints,
+                                                   in_cost_raster=Raster(inbarrierweight_outras[year])+0.0001))) +
+                            0.5)
 
                 # Zonal statistics based on buffer (using pointid, the unique ID of each point for that livelihood)
                 # Compute mean access within livelihood-specific buffer and writes it out to table

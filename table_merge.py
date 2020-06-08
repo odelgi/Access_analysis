@@ -4,14 +4,6 @@ import pandas as pd
 from collections import defaultdict
 from accesscalc_parallel import *
 
-def tabmerge_dict(tablist):
-    outdict = {}
-    for tab in tablist:
-        print(tab)
-        for row in arcpy.da.SearchCursor(tab, ['Value', 'MEAN']):
-            outdict[row[0]] = row[1]
-    return(outdict)
-
 if __name__ == 'main':
     formatdir = os.path.join(os.path.dirname(os.path.abspath(__file__)).split('\\src')[0])  # To update for final run
     datadir = os.path.join(formatdir, 'data')
@@ -33,6 +25,7 @@ if __name__ == 'main':
     livelihoods.remove('Combined_livelihood')
 
     #Get panda df of tables
+    print('Getting all zonal statistics tables...')
     tablist = getfilelist(dir=outstats, repattern=".*[.]dbf$", gdbf=False, nongdbf=True)
     tablist.extend(getfilelist(dir=outstats, gdbf=True, nongdbf=False))
 
@@ -48,7 +41,6 @@ if __name__ == 'main':
     processed_pd = tables_pd.groupby(['llhood', 'group']).filter(lambda x: x['year'].nunique() == 3). \
         drop_duplicates(subset=['llhood', 'group'])
 
-
     #Create a raster of access for each llhood and year by aggregating all tables (yielding an access value for each pixel-point)
     access_outgdb = {}
 
@@ -56,6 +48,7 @@ if __name__ == 'main':
     for llhood in tables_pd['llhood'].unique():
         access_outgdb[llhood] = os.path.join(resdir, 'Analysis_Chp1_W1', 'W1_3030', 'Access_W1_3030',
                                              'Access_W1_{0}'.format(llhood), 'Access_W1_{0}.gdb'.format(llhood))
+        pathcheckcreate(access_outgdb[llhood])
         #Ierate over each year
         for year in tables_pd['year'].unique():
             #Path of output access raster
@@ -63,15 +56,15 @@ if __name__ == 'main':
 
             #Perform analysis only if output raster doesn't exist
             if not arcpy.Exists(access_outras):
-                print(year)
+                print("Processing {}...".format(access_outras))
+
                 #Aggregate values across all pixels-points for that livelihood-year
+                print('Aggregating zonal statistics tables...')
                 merged_dict = tabmerge_dict(tables_pd.loc[(tables_pd['llhood']==llhood) &
                                                           (tables_pd['year']==year), 'path'])
 
-                # Output access gdb
-                pathcheckcreate(access_outgdb[llhood])
-
                 #Join all statistics tables of access to pellepoints (a point for each 30x30 m pixel in Pellegrini department)
+                print('Joining tables to points...')
                 accessfield = 'access{0}{1}'.format(llhood, year)
                 if not accessfield in [f.name for f in arcpy.ListFields(pellepoints)]:
                     print('Create {} field'.format(accessfield))
@@ -90,6 +83,7 @@ if __name__ == 'main':
                             x += 1
 
                 # Convert points back to raster
+                print('Converting points to raster...')
                 arcpy.PointToRaster_conversion(in_features=pellepoints, value_field=accessfield, cellsize=refraster,
                                                out_rasterdataset=access_outras)
 
