@@ -122,7 +122,7 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
                               method='PLANAR')
 
         templateras = inbarrierweight_outras[inyears[0]]
-        arcpy.env.SnapRaster = templateras
+        arcpy.env.snapRaster = templateras
         buffras_memory = r'in_memory/subbufferas{}'.format(ingroup)
         #print('Conversion to raster...')
         arcpy.FeatureToRaster_conversion(in_features=r'in_memory/subbuffers{}'.format(ingroup),
@@ -264,7 +264,11 @@ if __name__ == '__main__':
     ingdbs = arcpy.ListWorkspaces('*', workspace_type='FileGDB')
 
     #---- Run in parallel for all gdb -----#
-    analysis_years = ['2000', '2010', '2018'] #Define years of analysis
+    # Define years of analysis
+    if len(sys.argv) == 2:     # Try to get years to process from command line input
+        analysis_years = sys.argv[1]
+    else: #Otherwise, default to
+        analysis_years = ['2000', '2010', '2018']
 
     #Get number of cpus to run unto - should work on HPC and personal computer
     ncpus = int(os.environ.get('SLURM_CPUS_PER_TASK')) if \
@@ -278,6 +282,6 @@ if __name__ == '__main__':
         #Assign chunked gdbs to worker processes, keeping analysis years and outstats arguments constant with 'partial'
         future = pool.map(partial(accesscalc_chunkedir, inyears=analysis_years, outdir=resdir),
                           ingdbs,
-                          #chunksize=int(0.5 + len(ingdbs) / float(ncpus)),  # Divide all gdbs among chunks upfront so that timeout doesn't lead to new worker process
+                          #chunksize=int(0.5 + len(ingdbs) / float(ncpus)),  # for HPC ---- Divide all gdbs among chunks upfront so that timeout doesn't lead to new worker process
                           timeout=maxruntime) #Raise timeout error after maxruntime
         task_done(future) #Return timeout error
