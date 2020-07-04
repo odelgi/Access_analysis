@@ -264,11 +264,19 @@ if __name__ == '__main__':
     ingdbs = arcpy.ListWorkspaces('*', workspace_type='FileGDB')
 
     #---- Run in parallel for all gdb -----#
-    # Define years of analysis
+    # Define years of analysis (improve with argpars, etc. down the line)
     if len(sys.argv) == 2:     # Try to get years to process from command line input
         analysis_years = sys.argv[1]
+
+        # Make sure analysis_years is list of strings
+        if isinstance(analysis_years, str) or isinstance(analysis_years, int):
+            analysis_years = [analysis_years]
+        analysis_years = [str(yr) for yr in analysis_years]
+
     else: #Otherwise, default to
         analysis_years = ['2000', '2010', '2018']
+
+    print('Processing {}...'.format(", ".join(analysis_years)))
 
     #Get number of cpus to run unto - should work on HPC and personal computer
     ncpus = int(os.environ.get('SLURM_CPUS_PER_TASK')) if \

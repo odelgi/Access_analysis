@@ -36,7 +36,13 @@ def tabmerge_dict(tablist):
             outdict[row[0]] = row[1]
     return(outdict)
 
-def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir, out_chunkdir, out_formatdir):
+def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir, out_chunkdir, out_formatdir,
+                        in_llhood=None):
+    #Make sure analysis_years is list of strings
+    if isinstance(analysis_years, str) or isinstance(analysis_years, int):
+        analysis_years = [analysis_years]
+    analysis_years = [str(yr) for yr in analysis_years]
+
     #Repreate paths
     datadir = os.path.join(rootdir, 'data')
     resdir = os.path.join(rootdir, 'results')
@@ -45,16 +51,23 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
 
     weighting_table = os.path.join(datadir, 'Weighting_scheme.xlsx')
     weightingpd = pd.read_excel(weighting_table, sheetname='Weighting_1')
-    livelihoods = weightingpd['Livelihood'].tolist()
-    livelihoods.remove('Combined_livelihood')
+
+    if in_llhood is None:
+        livelihoods = weightingpd['Livelihood'].tolist()
+        livelihoods.remove('Combined_livelihood')
+    else:
+        livelihoods = in_llhood
+        if isinstance(livelihoods, str):
+            livelihoods = [livelihoods]
 
     basemapgdb = os.path.join(resdir, "Base_layers_Pellegrini", "Basemaps_UTM20S.gdb")
     pelleras = os.path.join(basemapgdb, "Pellegri_department_UTM20S")
     
-    #Recreate paths
-    barrierweight_outdir = os.path.join(resdir,'Analysis_Chp1_W1','W1_3030','Barrier_weighting_1_3030')
+    #Re- /create paths
     forestoutdir = os.path.join(resdir, 'Base_layers_Pellegrini/Forest_Hansen.gdb')
     barrierweight_outras = {}; forestyearly = {}; bufferad = {}; costtab_outgdb = {}
+    access_outgdb = {}; access_outras = {}
+
     for llhood in livelihoods:
         print(llhood)
         bufferad[llhood] = float(weightingpd.loc[weightingpd['Livelihood'] == llhood, 'Buffer_max_rad'])
@@ -66,6 +79,13 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                                                        'W1_3030', 'Cost_distance_W1_3030',
                                                        'Cost_distance_{}_w1'.format(llhood),
                                                        'CD_{0}_{1}_w1.gdb'.format(llhood, year))
+
+            access_outgdb[llhood] = os.path.join(resdir, 'Analysis_Chp1_W1', 'W1_3030', 'Access_W1_3030',
+                                                 'Access_W1_{0}'.format(llhood), 'Access_W1_{0}.gdb'.format(llhood))
+            pathcheckcreate(access_outgdb[llhood])
+            # Path of output access raster
+            access_outras[llhood + year] = os.path.join(access_outgdb[llhood],
+                                                        'accessras_W1_{0}{1}'.format(llhood, year))
     
     # LOOP: for each livelihood, for each group, create separate folder-points-buffers to run cost-distance in parallel on HPC
     ### ------- Get all processed tables -----------------------------------------------------------------------------------
@@ -80,28 +100,21 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
     tables_pd['llhood'] = tables_pd['llhood1'] + '_' + tables_pd['llhood2']
     tables_pd = tables_pd.drop(labels=['llhood1', 'llhood2'], axis=1)
     
-    processed_pd = tables_pd.groupby(['llhood', 'group']).filter(lambda x: x['year'].nunique() == 3).\
-        drop_duplicates(subset=['llhood', 'group'])
+    # processed_pd = tables_pd.groupby(['llhood', 'group']).filter(lambda x: x['year'].nunique() == 3).\
+    #     drop_duplicates(subset=['llhood', 'group'])
     
     ### ------ Create a raster of access for each llhood and year by aggregating all tables (yielding an access value for each pixel-point) ---------
-    access_outgdb = {}
     refraster = pelleras
     fishgroupstoprocess = defaultdict(set)
     
     # Iterate over each livelihood
     for llhood in tables_pd['llhood'].unique():
-        access_outgdb[llhood] = os.path.join(resdir, 'Analysis_Chp1_W1', 'W1_3030', 'Access_W1_3030',
-                                             'Access_W1_{0}'.format(llhood), 'Access_W1_{0}.gdb'.format(llhood))
-        pathcheckcreate(access_outgdb[llhood])
         # Iterate over each year
         for year in tables_pd['year'].unique():
             if year in analysis_years:
-                # Path of output access raster
-                access_outras = os.path.join(access_outgdb[llhood], 'accessras_W1_{0}{1}'.format(llhood, year))
-
                 # Perform analysis only if output raster doesn't exist
-                if not arcpy.Exists(access_outras):
-                    print("Processing {}...".format(access_outras))
+                if not arcpy.Exists(access_outras[llhood+year]):
+                    print("Processing {}...".format(access_outras[llhood+year]))
 
                     # Aggregate values across all pixels-points for that livelihood-year
                     print('Aggregating zonal statistics tables...')
@@ -124,7 +137,7 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                                 try:
                                     row[1] = merged_dict[row[0]]
                                 except:
-                                    fishgroupstoprocess[llhood].append(row[2])
+                                    fishgroupstoprocess[llhood].add(row[2])
                                     print('pointid {} was not found in dictionary'.format(row[0]))
                                 cursor.updateRow(row)
                                 x += 1
@@ -136,14 +149,14 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                         arcpy.PointToRaster_conversion(in_features=in_pointstoprocess,
                                                        value_field=accessfield,
                                                        cellsize=refraster,
-                                                       out_rasterdataset=access_outras)
+                                                       out_rasterdataset=access_outras[llhood+year])
                         arcpy.ClearEnvironment("extent")
                         arcpy.ClearEnvironment("snapRaster")
                     else:
                         print('No zonal statistics available for that livelihood for that year...')
 
                 else:
-                    print('{} already exists...'.format(access_outras))
+                    print('{} already exists...'.format(access_outras[llhood+year]))
     
     ### ------ Run analysis on 10 groups to check speed ----- ####
     testdir = os.path.join(out_chunkdir, 'testdir')
@@ -160,7 +173,8 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
             arcpy.AddIndex_management(in_pointstoprocess, fields='group{}'.format(llhood),
                                       index_name='group{}'.format(llhood))  # Add index to speed up querying
     
-        if llhood not in fishgroupstoprocess:
+        if ((llhood not in fishgroupstoprocess) and
+                (not all(arcpy.Exists(access_outras[llhood+y]) for y in analysis_years))):
             print('Getting groups...')
             fishgroupstoprocess[llhood] = {row[0] for row in arcpy.da.SearchCursor(in_pointstoprocess,
                                                                                    'group{}'.format(llhood))}
@@ -262,48 +276,53 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
         else:
             print('All groups for {} have already been processed...'.format(llhood))
 
-if __name__ == '__main__':
-    ### Set environment settings ###
-    # https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
-    arcpy.env.overwriteOutput = 'True'
-    arcpy.CheckOutExtension("Spatial")
 
-    #### Directory structure ###
-    rootdir = os.path.dirname(os.path.abspath(__file__)).split('\\src')[0]
-    datadir = os.path.join(rootdir, 'data')
-    resdir = os.path.join(rootdir, 'results')
+### Set environment settings ###
+# https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
+arcpy.env.overwriteOutput = 'True'
+arcpy.CheckOutExtension("Spatial")
 
-    llhoodbuffer_outdir = os.path.join(resdir, 'Analysis_Chp1_W1',
-                                       'Buffers_W1.gdb')  # Output buffer path for each livelihood
-    pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
+#### Directory structure ###
+rootdir = os.path.dirname(os.path.abspath(__file__)).split('\\src')[0]
+datadir = os.path.join(rootdir, 'data')
+resdir = os.path.join(rootdir, 'results')
 
-    #Process subset of areas for assessing access in specific communities
-    commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas', 'Developed_areas_merged.gdb')
-    for comyr in ['2000', '2010', '2018']:
-        commupoly = os.path.join(commugdb, 'developed_areas_{}_merged'.format(comyr))
-        chunkdir_commu = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_communities')
-        chunkdir_commudat = os.path.join(chunkdir_commu, 'data')
-        pathcheckcreate(chunkdir_commudat)
+llhoodbuffer_outdir = os.path.join(resdir, 'Analysis_Chp1_W1',
+                                   'Buffers_W1.gdb')  # Output buffer path for each livelihood
+pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
 
-        commupts = os.path.join(chunkdir_commudat, 'pellepoints_developedareas_{}.shp'.format(comyr))
+#Process subset of areas for assessing access in specific communities
+commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas', 'Developed_areas_merged.gdb')
+for comyr in ['2000', '2010', '2018']:
+    commupoly = os.path.join(commugdb, 'developed_areas_{}_merged'.format(comyr))
+    chunkdir_commu = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_communities')
+    chunkdir_commudat = os.path.join(chunkdir_commu, 'datapts.gdb')
+    pathcheckcreate(chunkdir_commudat)
+
+    commupts = os.path.join(chunkdir_commudat, 'pellepoints_developedareas_{}'.format(comyr))
+    if not arcpy.Exists(commupts):
         arcpy.MakeFeatureLayer_management(pellepoints, 'pelleptlyr')
         arcpy.SelectLayerByLocation_management('pelleptlyr',
                                                overlap_type='INTERSECT',
                                                select_features=commupoly)
         arcpy.CopyFeatures_management('pelleptlyr', commupts)
+    else:
+        print('{} already exits...'.format(commupts))
 
-        mergetables_rechunk(rootdir = rootdir,
-                            in_pointstoprocess = commupts,
-                            analysis_years = comyr,
-                            in_statsdir = os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
-                            out_chunkdir = chunkdir_commu,
-                            out_formatdir = os.path.join(chunkdir_commu, 'Communitychunks_input{}'.format(comyr)))
+    mergetables_rechunk(rootdir=rootdir,
+                        in_pointstoprocess=commupts,
+                        analysis_years=comyr,
+                        in_statsdir=os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
+                        out_chunkdir=chunkdir_commu,
+                        out_formatdir=os.path.join(chunkdir_commu, 'Communitychunks_input{}'.format(comyr)),
+                        in_llhood=None)
 
-    #Process full extent
-    chunkdir_HPC = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_HPC')
-    mergetables_rechunk(rootdir = rootdir,
-                        in_pointstoprocess = pellepoints,
-                        analysis_years= ['2000', '2010', '2018'],  # Years for analysis
-                        in_statsdir = os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
-                        out_chunkdir = chunkdir_HPC,
-                        out_formatdir = os.path.join(chunkdir_HPC, 'White_input{}'.format(time.strftime("%Y%m%d"))))
+#Process full extent
+chunkdir_HPC = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_HPC')
+mergetables_rechunk(rootdir = rootdir,
+                    in_pointstoprocess = pellepoints,
+                    analysis_years= ['2000', '2010', '2018'],  # Years for analysis
+                    in_statsdir = os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
+                    out_chunkdir = chunkdir_HPC,
+                    out_formatdir = os.path.join(chunkdir_HPC, 'White_input{}'.format(time.strftime("%Y%m%d"))),
+                    in_llhood = 'Caprine_livestock')
