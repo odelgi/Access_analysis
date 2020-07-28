@@ -16,7 +16,8 @@
 #    4. Compute deforestation raster for each year
 #    5. Rasterize barrier lines
 #    6. Assign livelihood-specific weighting to barrier rasters
-#    7. Assign livelihood-specific weighting to barrier rasters
+#    7. For each livelihood, assign pixels to groups whose livelihood-specific buffer sizes do not overlap so that cost
+#    distance can be calculated for multiple locations at a time.
 
 #-----------------------------------------------------------------------------------------------------------------------
 

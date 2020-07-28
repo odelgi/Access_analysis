@@ -35,14 +35,16 @@ To obtain all input data and products, download the accompanying [data repositor
 The scripts take care of downloading reference Landsat imagery and Forest Loss data 
 
 #### Project structure
-The scripts contained in this Github repository will only function if contextualized within a specific directory
-structure (_dat_, _results_, and _src_ directories form the basis of the project structure, 
-following [Wilson et al. 2017](https://doi.org/10.1371/journal.pcbi.1005510) and others), provided in the data repository. 
-The data repository already includes a snapshot of the scripts used to run the 
-analysis at the time of the publication of the accompanying peer-reviewed article.
+The scripts contained in this Github repository will only function if contextualized within the specific directory
+structure provided in the data repository (`data`,`results`, and `src`subdirectories form the basis of the project folder structure, 
+following [Wilson et al. 2017](https://doi.org/10.1371/journal.pcbi.1005510) and others). The scripts will automatically
+detect the absolute path of the project directory and conduct analysis using all relative path otherwise.
 
-If there have been updates to the source code since publication; these will be detailed in this README. 
-In this case, download this repository into the /src folder within the data repository.
+The data repository already includes a snapshot of the scripts used to run the 
+analysis at the time of the publication of the accompanying peer-reviewed article. If there have been updates to the source code since publication; these will be detailed in this README. 
+In this case, download this repository into the `src` folder within the
+_[Updates since peer-reviewed article publication](##Updates since peer-reviewed article publication)_ section of this 
+README file.
 
 ## Workflow
 The core of this analysis is based on a "cost distance" calculation. The cost distance tells us the difficulty 
@@ -63,9 +65,31 @@ Further, to speed up processing, a parallel processing workflow was implemented 
 be analyzed on different processor cores at the same time). This required further separating groups
 of locations into different chunks so that each chunk could be processed by a single core.
 
-
+The analysis requires that the scripts be run in the following order 
+(more detail on workflow within each script is available therein):
+1. [main_analysis_1.py](https://github.com/odelgi/Access_analysis/blob/master/main_analysis_1.py) to dowload and 
+pre-process data.
+2. [mergetables_rechunk.py](https://github.com/odelgi/Access_analysis/blob/master/mergetables_rechunk.py) to prepare data
+for parallel processing. 
+3. [accesscalc_parallel.py](https://github.com/odelgi/Access_analysis/blob/master/accesscalc_parallel.py) to run cost 
+distance calculation and compute access statistics in parallel. This script can only be run from command line or
+ imported for functions.
+4. [mergetables_rechunk.py](https://github.com/odelgi/Access_analysis/blob/master/mergetables_rechunk.py) again to
+ compile cost distance statistics across all runs, livelihoods, and years, generate continuous access rasters, determine
+ the locations for which access still needs to be calculated, and re-prepare data (chunking) for re-running 
+ [accesscalc_parallel.py](https://github.com/odelgi/Access_analysis/blob/master/accesscalc_parallel.py).
+ 
+    Because this analysis is so computing intensive, it will probably take a few cycles of running [mergetables_rechunk.py](https://github.com/odelgi/Access_analysis/blob/master/mergetables_rechunk.py)
+    and  [accesscalc_parallel.py](https://github.com/odelgi/Access_analysis/blob/master/accesscalc_parallel.py) before obtaining
+    access statistics for the entire study area. 
+    Once this is done. Run the next steps.
+5. [compute_deforestation.py](https://github.com/odelgi/Access_analysis/blob/master/compute_deforestation.py) to compute
+a conventional measure of access loss based only on a binary map of deforestation.
+6. [get_communitystats.py](https://github.com/odelgi/Access_analysis/blob/master/get_communitystats.py) to compute yearly 
+access and deforestation indices averaged over the geographic span of community polygons.
 
 ## Possible speed-ups
+To be completed. 
 
 ## Updates since peer-reviewed article publication
 None
@@ -75,8 +99,8 @@ None
 * [Olivia del Giorgio](https://github.com/odelgi)
 
 ## License
+To be completed:
 A short snippet describing the license (MIT, Apache etc)
-
 MIT © [Yourname]()
 
 ## Acknowledgments
