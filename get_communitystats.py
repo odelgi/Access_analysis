@@ -76,7 +76,7 @@ for llhood in livelihoods:
                                        zone_field=arcpy.Describe(commupoly).OIDFieldName,
                                        in_value_raster=access_outras[llhood+year],
                                        out_table=outstats,
-                                       ignore_nodata="NODATA")
+                                       ignore_nodata="DATA")
             else:
                 print('{} does not exist...'.format(access_outras[llhood + year]))
 
@@ -102,6 +102,6 @@ for bufferad in list(weightingpd['Buffer_max_rad'])[:-1]:
                                        zone_field=arcpy.Describe(commupoly).OIDFieldName,
                                        in_value_raster=deforas,
                                        out_table=outstats,
-                                       ignore_nodata="NODATA")
+                                       ignore_nodata="DATA")
             else:
                 print('{} does not exist...'.format(deforas))
