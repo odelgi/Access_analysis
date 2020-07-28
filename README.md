@@ -43,7 +43,7 @@ detect the absolute path of the project directory and conduct analysis using all
 The data repository already includes a snapshot of the scripts used to run the 
 analysis at the time of the publication of the accompanying peer-reviewed article. If there have been updates to the source code since publication; these will be detailed in this README. 
 In this case, download this repository into the `src` folder within the
-_[Updates since peer-reviewed article publication](##Updates since peer-reviewed article publication)_ section of this 
+_[Updates since peer-reviewed article publication](#Updates since peer-reviewed article publication)_ section of this 
 README file.
 
 ## Workflow
