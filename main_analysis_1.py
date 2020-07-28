@@ -1,57 +1,60 @@
-#------------------------------------------------------------------------------
+#-----------------------------------------------------------------------------------------------------------------------
 # Analysis_Chp1 (2020)
-# Title: Access analysis
-# del Giorgio, Olivia
+# Title: Access analysis data preparation
+# del Giorgio, Olivia (https://github.com/odelgi)
 # Messager, Mathis (https://github.com/messamat)
 
-# Model description: Produces a raster with "access index" values for each cell
+#Structure of analysis
+# A. SET ENVIRONMENT SETTINGS
+# B. SET DIRECTORY STRUCTURE
+# C. DEFINE INPUT VARIABLES
+# D. DEFINE OUTPUT VARIABLES
+# E. PREPARE DATA
+#    1. Get and pre-process Landsat imagery
+#    2. Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat)
+#    3. Download, project, and clip Hansen et al. forest loss
+#    4. Compute deforestation raster for each year
+#    5. Rasterize barrier lines
+#    6. Assign livelihood-specific weighting to barrier rasters
+#    7. Assign livelihood-specific weighting to barrier rasters
 
-"""Usage: 
-where
+#-----------------------------------------------------------------------------------------------------------------------
 
-"""
-# -----------------------------------------------------------------------------
 # Import system modules
 import arcpy
 from arcpy.sa import *
-import numpy as np
+
 import os #Module for operating system operations (e.g. os.path.exists)
 import re #Module for string pattern matching
 import requests #Module to access URLs
 import pandas as pd #Module for manipulating tables (non-gis tables mostly) https://pandas.pydata.org/pandas-docs/stable/getting_started/overview.html
 from usgs import api #Module to grab landsat data
-from collections import defaultdict
-from collections import Counter
-import time
-import math
+from collections import defaultdict #Module to define dictionaries (data structure) with default values (e.g. list)
 from accesscalc_parallel import *
 
-### Set environment settings ###
+###---------------------------------------- A. SET ENVIRONMENT SETTINGS ---------------------------------------------###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
 arcpy.env.overwriteOutput = 'True'
 arcpy.CheckOutExtension("Spatial")
 
-# File extension for the output rasters
-# output_ext = ".img"
-
 analysis_years = ['2000', '2010', '2018'] #Years for analysis
 
-#### Directory structure ###
-rootdir = os.path.dirname(os.path.abspath(__file__)).split('\\src')[0]
+###---------------------------------------- B. SET DIRECTORY STRUCTURE ----------------------------------------------###
+rootdir = os.path.dirname(os.path.abspath(__file__)).split('\\src')[0] #Get project directory based on location of script within rootdir/src/
 datadir = os.path.join(rootdir, 'data')
 resdir = os.path.join(rootdir, 'results')
 
-data2dir = os.path.join(datadir, 'Secondary_data') #Secondary data
 pathsdir =  os.path.join(datadir, 'Paths') #Primary data
+data2dir = os.path.join(datadir, 'Secondary_data') #Secondary data
 
 barriersdir = os.path.join(datadir, 'Barriers_Pellegrini')
 pathcheckcreate(barriersdir)
 
 #Landsat imagery directory
-landsatdir = os.path.join(datadir, 'landsat')
+landsatdir = os.path.join(datadir, 'landsat') #Raw data
 pathcheckcreate(landsatdir)
 
-landsatoutdir = os.path.join(resdir, 'landsat')
+landsatoutdir = os.path.join(resdir, 'landsat') #Processed data
 pathcheckcreate(landsatoutdir)
 
 #Global Forest Change directory
@@ -64,6 +67,12 @@ pathcheckcreate(forestoutdir)
 barrier_indir = os.path.join(barriersdir, "Barriers_clean_coded.gdb")
 pathcheckcreate(barrier_indir)
 
+# Output geodatabase to hold basemaps
+basemapgdb = os.path.join(resdir,
+                          "Base_layers_Pellegrini",
+                          "Basemaps_UTM20S.gdb")
+pathcheckcreate(basemapgdb)
+
 # Output raster geodatabase for unweighted barrier rasters
 barrier_outdir = os.path.join(resdir, "Base_layers_Pellegrini\Boundary_rasters_3030.gdb")
 pathcheckcreate(barrier_outdir)
@@ -75,25 +84,21 @@ barrierweight_outdir = os.path.join(resdir,
                                     'Barrier_weighting_1_3030')
 pathcheckcreate(barrierweight_outdir)
 
-#Output buffer and points gdbs
+#Output gdb to hold intermediate data product for access calculation
 llhoodbuffer_outdir = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb') #Output buffer path for each livelihood
 pathcheckcreate(llhoodbuffer_outdir) #Make sure that directories exist to write out buffers
 
-#### Input variables #### 
+###---------------------------------------- C. DEFINE INPUT VARIABLES -----------------------------------------------###
 """Potential source of data: http://demo-ide.arsat.com.ar/ide-santiago/"""
 #UTM20S Coordinate System (CS) oject to use when projecting
 csref = arcpy.SpatialReference(32720)
-pelleoutline = os.path.join(data2dir,
-                            'Pellegrini_outline.gdb/Pellegri_department_outline_wgs84')
+pelleoutline = os.path.join(data2dir,  'Pellegrini_outline.gdb/Pellegri_department_outline_wgs84')
 pelleextent_wgs84 = arcpy.Describe(pelleoutline).Extent #command to get layer's metadata
+
+#Table containing data on livelihood-specific use area radius and barrier weighting
 weighting_table = os.path.join(datadir, 'Weighting_scheme.xlsx')
 
-### Output variables ####
-basemapgdb = os.path.join(resdir,
-                          "Base_layers_Pellegrini",
-                          "Basemaps_UTM20S.gdb")
-pathcheckcreate(basemapgdb)
-
+###---------------------------------------- D. DEFINE OUTPUT VARIABLES ----------------------------------------------###
 pelleUTM20S = os.path.join(basemapgdb, "Pellegri_department_outline_UTM20S")
 pelleras = os.path.join(basemapgdb,"Pellegri_department_UTM20S") #Reference raster for snapping throughout analysis
 pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
@@ -103,8 +108,9 @@ fishpoints = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet
 barrier_cleancodedlist = {i: os.path.join(barrier_indir, 'Paths_{}_coded_clean_UTM20S'.format(i))
                           for i in analysis_years}
 
-###################### PREPARE DATA ###########################################
-### Get Landsat imagery ###
+###---------------------------------------- E. PREPARE DATA ---------------------------------------------------------###
+#-----------------------------------------------------------------------------------------------------------------------
+### 1. Get and pre-process Landsat imagery
 # Initialize a new API instance and get an access key
 #### TO CONTINUE -- NEED API KEY ######
 """api.search(dataset='LANDSAT_8', node='EE', 
@@ -145,7 +151,8 @@ for year in landsat_years:
                                        resampling_type='NEAREST')
 
 
-### Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat) ###
+#-----------------------------------------------------------------------------------------------------------------------
+### 2. Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat)
 if not arcpy.Exists(pelleUTM20S):
     print('Projecting study area polygon...')
     arcpy.Project_management(in_dataset=pelleoutline,
@@ -160,10 +167,10 @@ if not arcpy.Exists(pelleras):
     arcpy.FeatureToRaster_conversion(in_features=pelleUTM20S, field="Code",
                                      out_raster=pelleras,
                                      cell_size=refraster)
-arcpy.env.snapRaster = pelleras #Reference raster for snapping throughout analysis
+arcpy.env.snapRaster = pelleras #Reference raster for snapping throughout analysis #####################################
 
-#------------------------------------------------------------------------------
-### Download, project, and clip Hansen et al. forest loss ###
+#-----------------------------------------------------------------------------------------------------------------------
+### 3. Download, project, and clip Hansen et al. forest loss ###
 GFCoutclip = {}
 for product in ['datamask', 'gain', 'lossyear', 'treecover2000']:
 
@@ -198,10 +205,10 @@ for product in ['datamask', 'gain', 'lossyear', 'treecover2000']:
         ExtractByMask(in_raster=GFCoutproj,
                       in_mask_data=pelleras).save(GFCoutclip[product])
 
-#------------------------------------------------------------------------------
-# Creating resource weighting rasters for each livelihood based on deforestation.
+#-----------------------------------------------------------------------------------------------------------------------
+### 4. Compute deforestation raster for each year
 
-# Compute yealry forest cover
+# Compute yearly forest cover
 forestyearly = {}
 for year in analysis_years:
     #Assign output path to foresyearly dictionary with year as the key
@@ -216,8 +223,8 @@ for year in analysis_years:
                              Con(Raster(GFCoutclip['treecover2000']) >= 1, 1, 0)) #Otherwise, if treecover2000 > 1%, assign 1 (forest), else assign 0 (no forest)
         forestloss_sum.save(forestyearly[year])
 
-#------------------------------------------------------------------------------
-### Rasterize barrier lines ###
+#-----------------------------------------------------------------------------------------------------------------------
+### 5. Rasterize barrier lines
 #For each year that we decided to analyze
 barrier_outras = {} #Create empty dictionary to populate with output raster layer names in the loop associated to each year
 for year in analysis_years:
@@ -233,8 +240,8 @@ for year in analysis_years:
                                           priority_field='Code',
                                           cellsize=refraster)
 
-#------------------------------------------------------------------------------
-#Assign weighting to barrier rasters
+#-----------------------------------------------------------------------------------------------------------------------
+### 6. Assign livelihood-specific weighting to barrier rasters
 weightingmeta = pd.read_excel(weighting_table, sheetname='Metadata') #Read weighting excel table, only Metadata sheet
 weightingcodes = weightingmeta.loc[weightingmeta['Variable name'].str.contains("BW"), #Subset metadata sheet to only keep rows for which 'Variable name' column string contains 'BW'
                                    ['Variable name', 'Code']] #For those rows, only keep Variable name and Code columns
@@ -277,8 +284,8 @@ for llhood in livelihoods:
                 in_mask_data=pelleras)
             outreclas.save(barrierweight_outras[llhood+year])
 
-#------------------------------------------------------------------------------
-#Prepare data for generation of cost distance rasters
+#-----------------------------------------------------------------------------------------------------------------------
+### 7. Assign livelihood-specific weighting to barrier rasters
 
 #Create gdbs for cost raster
 costtab_outgdb = {}
@@ -292,10 +299,9 @@ for llhood in livelihoods:
         pathcheckcreate(costtab_outgdb[llhood+year])
 del llhood
 
-#LOOP: for each livelihood, assign pixels to groups so that can run non-overlapping cost distance within livelihood-specific buffer
+#For each livelihood, assign pixels to groups so that can run non-overlapping cost distance within livelihood-specific buffer sizes
 bufferad = {}
 for llhood in livelihoods:
-    #llhood = u'Bovine_livestock'
     print(llhood)
     bufferad[llhood] = float(weightingpd.loc[weightingpd['Livelihood']==llhood, 'Buffer_max_rad']) #Get livelihood_specific buffer radius from table
     fishout = os.path.join(resdir, 'Analysis_Chp1_W1', 'Buffers_W1.gdb', 'fishnet{}'.format(llhood))
@@ -317,7 +323,8 @@ for llhood in livelihoods:
                            'fishnetras{}'.format(llhood))
 
     #Change raster tile size to make sure that cell IDs are ordered within a fishnet cell
-    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad[llhood]-bufferad[llhood]%arcpy.Describe(refraster).meanCellWidth)*2 + arcpy.Describe(refraster).meanCellWidth*5)/arcpy.Describe(refraster).meanCellWidth))
+    arcpy.env.tileSize = "{0} {0}".format(int(((bufferad[llhood] - bufferad[llhood] % arcpy.Describe(refraster).meanCellWidth) * 2 +
+                                               arcpy.Describe(refraster).meanCellWidth * 5) / arcpy.Describe(refraster).meanCellWidth))
 
     if not arcpy.Exists(fishras):
         arcpy.env.extent = fishout
@@ -328,7 +335,7 @@ for llhood in livelihoods:
                                           cell_assignment = 'CELL_CENTER',
                                           cellsize = refraster)
 
-    #Convert study area raster to point (one point for each cell)
+    #Convert study area raster to point (one point for each 30x30 m cell)
     if not arcpy.Exists(fishpoints):
         print('Converting fishnet raster back to points...')
         arcpy.RasterToPoint_conversion(fishras, fishpoints, "Value")
