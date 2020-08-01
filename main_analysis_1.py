@@ -31,7 +31,113 @@ import requests #Module to access URLs
 import pandas as pd #Module for manipulating tables (non-gis tables mostly) https://pandas.pydata.org/pandas-docs/stable/getting_started/overview.html
 from usgs import api #Module to grab landsat data
 from collections import defaultdict #Module to define dictionaries (data structure) with default values (e.g. list)
+import json
+import urllib2
+import time
+import gzip
+import tarfile
+from functools import wraps
 from accesscalc_parallel import *
+
+###---------------------------------------- A. DEFINE FUNCTIONS -----------------------------------------------------###
+#Function to retry three times if urllib2.urlopen fails
+def retry(ExceptionToCheck, tries=3, delay=3, backoff=2, logger=None):
+    """Retry calling the decorated function using an exponential backoff.
+    http://www.saltycrane.com/blog/2009/11/trying-out-retry-decorator-python/
+    original from: http://wiki.python.org/moin/PythonDecoratorLibrary#Retry
+    :param ExceptionToCheck: the exception to check. may be a tuple of
+        exceptions to check
+    :type ExceptionToCheck: Exception or tuple
+    :param tries: number of times to try (not retry) before giving up
+    :type tries: int
+    :param delay: initial delay between retries in seconds
+    :type delay: int
+    :param backoff: backoff multiplier e.g. value of 2 will double the delay
+        each retry
+    :type backoff: int
+    :param logger: logger to use. If None, print
+    :type logger: logging.Logger instance
+    """
+    def deco_retry(f):
+
+        @wraps(f)
+        def f_retry(*args, **kwargs):
+            mtries, mdelay = tries, delay
+            while mtries > 1:
+                try:
+                    return f(*args, **kwargs)
+                except ExceptionToCheck, e:
+                    msg = "%s, Retrying in %d seconds..." % (str(e), mdelay)
+                    if logger:
+                        logger.warning(msg)
+                    else:
+                        print msg
+                    time.sleep(mdelay)
+                    mtries -= 1
+                    mdelay *= backoff
+            return f(*args, **kwargs)
+
+        return f_retry  # true decorator
+
+    return deco_retry
+
+@retry(urllib2.URLError, tries=3, delay=3, backoff=2)
+def urlopen_with_retry(in_url):
+    return urllib2.urlopen(in_url)#Retry three times if urllib2.urlopen fails
+
+#Function to download and unzip landsat scenes
+def dl_landsattiles(lss, dataset, apikey, outdir, mincctile=True, maxcloudcover=100):
+    sublss = defaultdict(dict)
+    print('Subsetting scenes to keep those with minimum land cover...')
+    if mincctile:
+        for tile in lss['data']['results']:
+            rowpath = tile['displayId'].split('_')[2]
+            if rowpath in sublss:
+                if float(tile['cloudCover']) < float(sublss[rowpath]['cloudCover']):
+                    sublss[rowpath] = tile
+            else:
+                sublss[rowpath] = tile
+    else:
+        sublss = lss
+
+    for tile in sublss.values():
+        # Only continue if there is less than set cloud cover on the image
+        if float(tile['cloudCover']) < maxcloudcover:
+            print(tile['entityId'])
+            # Get tile download info
+            gettile = api.download(dataset=dataset,
+                                   node='EE',
+                                   entityids=tile['entityId'],
+                                   product='STANDARD',
+                                   api_key=apikey)
+            tileurl = gettile['data'][0]['url']
+
+            # Get file name
+            print('Trying to access {}...'.format(tileurl))
+            req = urlopen_with_retry(in_url=tileurl)
+            cd = req.headers.get('content-disposition')
+            fname = re.findall('(?<=filename=")[A-Za-z0-9_.]+', cd)[0]
+            tiledirname = os.path.join(outdir, os.path.splitext(os.path.splitext(fname)[0])[0])
+            if not os.path.exists(tiledirname):
+                os.mkdir(tiledirname)
+            outpath = os.path.join(tiledirname, fname)
+
+            if not os.path.exists(outpath):  # Inspired from https://github.com/yannforget/landsatxplore
+                with open(outpath, 'wb') as f:
+                    chunk = req.read()
+                    f.write(chunk)
+                print('Downloaded {}, now unzipping...'.format(outpath))
+
+                tarf = os.path.splitext(outpath)[0]
+                with gzip.GzipFile(outpath, 'rb') as input:
+                    s = input.read()
+                    with open(tarf, 'wb') as output:
+                        output.write(s)
+
+                with tarfile.open(tarf) as ftar:
+                    ftar.extractall(tiledirname)  # specify which folder to extract to
+            else:
+                print('{} already exists...'.format(outpath))
 
 ###---------------------------------------- A. SET ENVIRONMENT SETTINGS ---------------------------------------------###
 #https://pro.arcgis.com/en/pro-app/arcpy/classes/env.htm
@@ -113,13 +219,63 @@ barrier_cleancodedlist = {i: os.path.join(barrier_indir, 'Paths_{}_coded_clean_U
 #-----------------------------------------------------------------------------------------------------------------------
 ### 1. Get and pre-process Landsat imagery
 # Initialize a new API instance and get an access key
-#### TO CONTINUE -- NEED API KEY ######
-"""api.search(dataset='LANDSAT_8', node='EE', 
-                ll={"longitude":pelleextent_wgs84.XMin, "latitude":pelleextent_wgs84.YMin},
-                ur={"longitude":pelleextent_wgs84.XMax, "latitude":pelleextent_wgs84.YMax},
-                start_date='2000-01-01', end_date='2018-12-31')
-"""
-landsat_raw = getfilelist(dir=landsatdir, repattern='LC08_L1[GTP]{2}.*B1[.]TIF$') #For explanation of repatter, check https://docs.python.org/3/howto/regex.html
+# The user credentials that will be used to authenticate access to the data
+with open("configs.json") as json_data_file:  # https://martin-thoma.com/configuration-files-in-python/
+    authdat = json.load(json_data_file)
+#Get temporary API key
+usgs_api_key = api.login(
+        str(authdat["username"]),
+        str(authdat["password"]),
+        save=False,
+        catalogId='EE')['data']
+
+#Get list of scenes from Landsat 7 for 2000
+lss_LC7_2000 = api.search(dataset='LANDSAT_ETM_C1',
+                          node='EE',
+                          ll={"longitude":pelleextent_wgs84.XMin, "latitude":pelleextent_wgs84.YMin},
+                          ur={"longitude":pelleextent_wgs84.XMax, "latitude":pelleextent_wgs84.YMax},
+                          start_date='2000-01-01', end_date='2000-12-31',
+                          api_key = usgs_api_key)
+
+#Download and unzip landsat 7 scenes with least cloud cover for 2000
+dl_landsattiles(lss=lss_LC7_2000, dataset='LANDSAT_ETM_C1', apikey=usgs_api_key,
+                outdir=landsatdir, mincctile=True, maxcloudcover=100)
+
+#Get list of scenes from Landsat 7 for 2010
+lss_LC7_2010 = api.search(dataset='LANDSAT_ETM_C1',
+                          node='EE',
+                          ll={"longitude":pelleextent_wgs84.XMin, "latitude":pelleextent_wgs84.YMin},
+                          ur={"longitude":pelleextent_wgs84.XMax, "latitude":pelleextent_wgs84.YMax},
+                          start_date='2010-01-01', end_date='2010-12-31',
+                          api_key = usgs_api_key)
+
+#Download and unzip landsat 7 scenes with least cloud cover for 2010
+dl_landsattiles(lss=lss_LC7_2010, dataset='LANDSAT_ETM_C1', apikey=usgs_api_key,
+                outdir=landsatdir, mincctile=True, maxcloudcover=100)
+
+#Get list of scenes from Landsat 8
+lss_LC8 = api.search(dataset='LANDSAT_8_C1',
+                     node='EE',
+                     ll={"longitude":pelleextent_wgs84.XMin, "latitude":pelleextent_wgs84.YMin},
+                     ur={"longitude":pelleextent_wgs84.XMax, "latitude":pelleextent_wgs84.YMax},
+                     start_date='2018-01-01', end_date='2018-12-31',
+                     api_key = usgs_api_key)
+
+#Download and unzip landsat 8 scenes with least cloud cover for 2018
+dl_landsattiles(lss=lss_LC8, dataset='LANDSAT_8_C1', apikey=usgs_api_key,
+                outdir=landsatdir, mincctile=True, maxcloudcover=100)
+
+#Create composites
+for scenedir in os.listdir(landsatdir):
+    scene_composite = os.path.join(landsatoutdir, '{}_composite.tif'.format(scenedir))
+    if not arcpy.Exists(scene_composite):
+        print('Create {}...'.format(scene_composite))
+        scenebandslist = getfilelist(dir=os.path.join(landsatdir, scenedir),
+                                     repattern='(LC08|LE07)_L1[GTP]{2}.*B[0-9]+[.]TIF$')
+        arcpy.CompositeBands_management(scenebandslist, scene_composite)
+
+#Mosaick and project scenes
+landsat_raw = getfilelist(dir=landsatoutdir, repattern='(LC08|LE07)_L1[GTP]{2}.*_composite[.]tif$') #For explanation of repattern, check https://docs.python.org/3/howto/regex.html
 landsat_years = set([os.path.split(tilename)[1][17:21] for tilename in landsat_raw])
 #os.path.split splits path into a two-item list with path root and file name as the first and second objects in the list
 #[1] grabs the second item in that list (file name)
@@ -139,7 +295,7 @@ for year in landsat_years:
                                            output_location= os.path.split(outras)[0],
                                            raster_dataset_name_with_extension=os.path.split(outras)[1],
                                            pixel_type='16_BIT_UNSIGNED',
-                                           number_of_bands=1,
+                                           number_of_bands=arcpy.Describe(inraslist[0]).bandCount,
                                            mosaic_method='MAXIMUM')
 
     #Re-project to UTM 20S
@@ -150,7 +306,6 @@ for year in landsat_years:
                                        out_raster= landsatproj[year],
                                        out_coor_system = csref,
                                        resampling_type='NEAREST')
-
 
 #-----------------------------------------------------------------------------------------------------------------------
 ### 2. Project and rasterize polygon of Pelegrinni department (matching grid layout of Landsat)
