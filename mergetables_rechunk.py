@@ -181,6 +181,14 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
     for llhood in tables_pd['llhood'].unique():
         #if processing that llhood
         if llhood in livelihoods:
+            #Create a field that records whether all analysis years have been processed.
+            # If all analysis years have been processed, it has a value of None, if not, it has a value of 0
+            accessfield_toprocess = 'access{0}_toprocess'.format(llhood, year)
+            print('Create {} field'.format(accessfield_toprocess))
+            if accessfield_toprocess in [f.name for f in arcpy.ListFields(in_pointstoprocess)]:
+                arcpy.DeleteField_management(in_pointstoprocess, accessfield_toprocess)
+            arcpy.AddField_management(in_table=in_pointstoprocess, field_name= accessfield_toprocess, field_type='SHORT')
+
             # Iterate over each year
             for year in tables_pd['year'].unique():
                 #if processing that year
@@ -203,7 +211,8 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                                 print('Create {} field'.format(accessfield))
                                 arcpy.AddField_management(in_table=in_pointstoprocess, field_name=accessfield, field_type='FLOAT')
 
-                            with arcpy.da.UpdateCursor(in_pointstoprocess, ['pointid', accessfield, 'group{}'.format(llhood)]) as cursor:
+                            with arcpy.da.UpdateCursor(in_pointstoprocess, ['pointid', accessfield,  accessfield_toprocess,
+                                                                            'group{}'.format(llhood)]) as cursor:
                                 x = 0
                                 for row in cursor:
                                     if x % 100000 == 0:
@@ -211,7 +220,8 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                                     if row[0] in merged_dict:
                                         row[1] = merged_dict[row[0]]
                                     else:
-                                        fishgroupstoprocess[llhood].add(row[2])
+                                        row[2] = 1
+                                        fishgroupstoprocess[llhood].add(row[3])
                                         print('pointid {} was not found in dictionary'.format(row[0]))
                                     cursor.updateRow(row)
                                     x += 1
@@ -261,7 +271,8 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
             if not arcpy.Exists(outpoints):
                 # Subset points based on group (so that their buffers don't overlap) and only keep points that overlap study area
                 arcpy.MakeFeatureLayer_management(in_features=in_pointstoprocess, out_layer='subpoints{}'.format(group),
-                                                  where_clause='{0} = {1}'.format('group{}'.format(llhood), group))
+                                                  where_clause='({0} = {1}) AND ({2} = 1)'.format(
+                                                      'group{}'.format(llhood), group, accessfield_toprocess))
                 arcpy.CopyFeatures_management('subpoints{}'.format(group), outpoints)
     
             # Test time that each group takes to process for each livelihood
@@ -328,16 +339,18 @@ def mergetables_rechunk(rootdir, in_pointstoprocess, analysis_years, in_statsdir
                 if not (arcpy.Exists(outchunkgdb)):
                     pathcheckcreate(outchunkgdb, verbose=True)
                     outchunkpoints= os.path.join(outchunkgdb, 'subpoints{0}{1}_{2}'.format(llhood, int(bufferad[llhood]), chunk))
-    
+
                     print('Copying points...')
                     if len(groupchunklist[chunk])>0:
                         print(len(groupchunklist[chunk]))
                         arcpy.CopyFeatures_management(
                             arcpy.MakeFeatureLayer_management(
                                 in_features=in_pointstoprocess, out_layer='pointslyr',
-                                where_clause='group{0} IN {1}'.format(llhood, tuple(groupchunklist[chunk]))), #[i for i in groupchunklist[chunk] if i is not None]
+                                where_clause='(group{0} IN {1}) AND ({2} = 1)'.format(
+                                    llhood, tuple(groupchunklist[chunk]), accessfield_toprocess)
+                            ), #[i for i in groupchunklist[chunk] if i is not None]
                             outchunkpoints)
-    
+
                         print('Copying ancillary data...')
                         for yr in analysis_years:
                             #Copy barrier raster
@@ -370,20 +383,33 @@ if __name__ == '__main__':
     pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
 
     #Process subset of areas for assessing access in specific communities
-    commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas', 'Developed_areas_merged.gdb')
-    commupolys = getfilelist(commugdb, repattern='developed_areas_.*', gdbf=True, nongdbf=False)
+    commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas.gdb')
+    commuptsgdb = os.path.join(datadir, 'Community_boundaries', 'Community_locations_byyear.gdb')
+    commupolys = getfilelist(commugdb, repattern='Developed_areas_.*', gdbf=True, nongdbf=False)
+    commu_censopts = getfilelist(commuptsgdb, repattern='Ubicacion_censo_UTM20S_.*', gdbf=True, nongdbf=False)
 
     chunkdir_commu = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_communities')
     chunkdir_commudat = os.path.join(chunkdir_commu, 'datapts.gdb')
     pathcheckcreate(chunkdir_commudat)
     commumerge = os.path.join(chunkdir_commudat, 'developed_areas_merge')
+    commu_censoptsmerge = os.path.join(chunkdir_commudat, 'Ubicacion_censo_UTM20S_merge')
     commudiss = os.path.join(chunkdir_commudat, 'developed_areas_dissolve')
     commupts = os.path.join(chunkdir_commudat, 'pellepoints_developedareas')
 
     if not arcpy.Exists(commupts):
-        arcpy.Merge_management(commupolys, commumerge)
-        arcpy.Dissolve_management(in_features=commumerge, out_feature_class=commudiss)
+        arcpy.Merge_management(commupolys, commumerge) #Merge all developed areas across years (i.e. one layer with all separate polygons for all years)
+        arcpy.Merge_management(commu_censopts, commu_censoptsmerge) #Same for census community point locations
 
+        #Subset developed area polygons to onlly keep those that intersect a census community loation
+        arcpy.MakeFeatureLayer_management(commumerge, 'commumerge_lyr')
+        arcpy.SelectLayerByLocation_management('commumerge_lyr',
+                                               overlap_type='INTERSECT',
+                                               select_features=commu_censoptsmerge)
+
+        #Dissolve developed area polygons to have a single layer without edges (removing overlapping poly)
+        arcpy.Dissolve_management(in_features='commumerge_lyr', out_feature_class=commudiss)
+
+        #Subset pixel/fishnet points to keep only those intersecting community developed areas
         arcpy.MakeFeatureLayer_management(pellepoints, 'pelleptlyr')
         arcpy.SelectLayerByLocation_management('pelleptlyr',
                                                overlap_type='INTERSECT',
@@ -407,4 +433,5 @@ if __name__ == '__main__':
                         in_statsdir = os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
                         out_chunkdir = chunkdir_HPC,
                         out_formatdir = os.path.join(chunkdir_HPC, 'White_input{}'.format(time.strftime("%Y%m%d"))),
-                        linearindexing=False)
+                        linearindexing=False,
+                        in_llhood='Caprine_livestock')
