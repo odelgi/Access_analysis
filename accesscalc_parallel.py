@@ -235,7 +235,7 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
 
         # Iterate through years of analysis
         #print('Iterating through years...')
-        arcpy.env.mask = buffras_memory
+        arcpy.env.extent = arcpy.env.mask = buffras_memory
         tempaccessdict = {}
         for year in inyears:
             outtab_year = os.path.join(costtab_outdir, 'CD_{0}_{1}_w1_{2}.dbf'.format(inllhood, year, ingroup))
@@ -276,6 +276,7 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
                 pass
 
         arcpy.ClearEnvironment("mask")
+        arcpy.ClearEnvironment("extent")
         arcpy.Delete_management(buffras_memory)
         arcpy.Delete_management("in_memory")
         del tempaccessdict
@@ -283,6 +284,7 @@ def accesscalc(inllhood, ingroup, inpoints, inbuffer_radius, inyears, inbarrierw
     except:
         #Clean up memory, environment, and temporary files
         arcpy.ClearEnvironment("mask")
+        arcpy.ClearEnvironment("extent")
         arcpy.Delete_management("in_memory")
 
         # Get the traceback object
