@@ -546,3 +546,63 @@ if not arcpy.Exists(pellepoints):
     arcpy.MakeFeatureLayer_management(in_features=fishpoints, out_layer='pellepoints_lyr',
                                       where_clause='pelleoverlap = 0')
     arcpy.CopyFeatures_management(in_features='pellepoints_lyr', out_feature_class=pellepoints)
+
+#-----------------------------------------------------------------------------------------------------------------------
+#Pre-process areas for assessing access in specific communities
+commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas.gdb')
+commuptsgdb = os.path.join(datadir, 'Community_boundaries', 'Community_locations_byyear.gdb')
+commupolys = getfilelist(commugdb, repattern='Developed_areas_.*', gdbf=True, nongdbf=False)
+commu_censopts = getfilelist(commuptsgdb, repattern='Ubicacion_censo_UTM20S_.*', gdbf=True, nongdbf=False)
+
+chunkdir_commu = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_communities')
+chunkdir_commudat = os.path.join(chunkdir_commu, 'datapts.gdb')
+pathcheckcreate(chunkdir_commudat)
+commumerge = os.path.join(chunkdir_commudat, 'developed_areas_merge')
+commu_censoptsmerge = os.path.join(chunkdir_commudat, 'Ubicacion_censo_UTM20S_merge')
+commudiss = os.path.join(chunkdir_commudat, 'developed_areas_dissolve')
+commupts = os.path.join(chunkdir_commudat, 'pellepoints_developedareas')
+
+if not arcpy.Exists(commupts):
+    arcpy.Merge_management(commupolys, commumerge) #Merge all developed areas across years (i.e. one layer with all separate polygons for all years)
+    arcpy.Merge_management(commu_censopts, commu_censoptsmerge) #Same for census community point locations
+
+    #Subset developed area polygons to onlly keep those that intersect a census community loation
+    arcpy.MakeFeatureLayer_management(commumerge, 'commumerge_lyr')
+    arcpy.SelectLayerByLocation_management('commumerge_lyr',
+                                           overlap_type='INTERSECT',
+                                           select_features=commu_censoptsmerge)
+
+    #Dissolve developed area polygons to have a single layer without edges (removing overlapping poly)
+    arcpy.Dissolve_management(in_features='commumerge_lyr', out_feature_class=commudiss)
+
+    #Subset pixel/fishnet points to keep only those intersecting community developed areas
+    arcpy.MakeFeatureLayer_management(pellepoints, 'pelleptlyr')
+    arcpy.SelectLayerByLocation_management('pelleptlyr',
+                                           overlap_type='INTERSECT',
+                                           select_features=commudiss)
+    arcpy.CopyFeatures_management('pelleptlyr', commupts)
+
+#-----------------------------------------------------------------------------------------------------------------------
+hhpts = os.path.join(datadir, 'Household_points/hh_points.gdb/hh_points')
+chunkdir_hhdat = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_hh', 'datapts.gdb')
+hhpts_proj = os.path.join(chunkdir_hhdat, 'hh_pointsproj')
+hhras = os.path.join(chunkdir_hhdat, 'hh_pointsras')
+hhraspts = os.path.join(chunkdir_hhdat, 'hh_pointraspts')
+pathcheckcreate(chunkdir_hhdat)
+pellehhpts = os.path.join(chunkdir_hhdat, 'pellepoints_households')
+
+if not arcpy.Exists(hhpts):
+    arcpy.env.snapRaster = pelleras
+    arcpy.Project_management(hhpts, out_dataset=hhpts_proj, out_coor_system=pelleras)
+    arcpy.PointToRaster_conversion(in_features=hhpts_proj, value_field='participant_code',
+                                   out_rasterdataset=hhras, cellsize=pelleras)
+    arcpy.RasterToPoint_conversion(hhras, hhraspts)
+
+    arcpy.MakeFeatureLayer_management(pellepoints, 'pelleptlyr')
+    arcpy.SelectLayerByLocation_management('pelleptlyr',
+                                           overlap_type='INTERSECT',
+                                           select_features=hhraspts)
+    arcpy.CopyFeatures_management('pelleptlyr', pellehhpts)
+
+
+

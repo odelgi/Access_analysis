@@ -382,39 +382,23 @@ if __name__ == '__main__':
                                        'Buffers_W1.gdb')  # Output buffer path for each livelihood
     pellepoints = os.path.join(llhoodbuffer_outdir, 'pellefishpoints')
 
-    #Process subset of areas for assessing access in specific communities
-    commugdb = os.path.join(datadir, 'Community_boundaries' , 'Developed_areas.gdb')
-    commuptsgdb = os.path.join(datadir, 'Community_boundaries', 'Community_locations_byyear.gdb')
-    commupolys = getfilelist(commugdb, repattern='Developed_areas_.*', gdbf=True, nongdbf=False)
-    commu_censopts = getfilelist(commuptsgdb, repattern='Ubicacion_censo_UTM20S_.*', gdbf=True, nongdbf=False)
+    #Process subset of areas for assessing access for households that were interviewed
+    chunkdir_hhdat = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_hh', 'datapts.gdb')
+    pellehhpts = os.path.join(chunkdir_hhdat, 'pellepoints_households')
 
+    mergetables_rechunk(rootdir=rootdir,
+                        in_pointstoprocess=pellehhpts,
+                        analysis_years=['2000', '2010', '2018'],
+                        in_statsdir=os.path.join(resdir, 'Analysis_Chp1_W1/W1_3030/Cost_distance_W1_3030'),
+                        out_chunkdir=os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_hh'),
+                        out_formatdir=os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_hh',
+                                                   'Householdschunks_input{}'.format(time.strftime("%Y%m%d"))),
+                        linearindexing=False)
+
+    #Process locations for assessing access in specific communities
     chunkdir_commu = os.path.join(resdir, 'Analysis_Chp1_W1', 'inputdata_communities')
     chunkdir_commudat = os.path.join(chunkdir_commu, 'datapts.gdb')
-    pathcheckcreate(chunkdir_commudat)
-    commumerge = os.path.join(chunkdir_commudat, 'developed_areas_merge')
-    commu_censoptsmerge = os.path.join(chunkdir_commudat, 'Ubicacion_censo_UTM20S_merge')
-    commudiss = os.path.join(chunkdir_commudat, 'developed_areas_dissolve')
     commupts = os.path.join(chunkdir_commudat, 'pellepoints_developedareas')
-
-    if not arcpy.Exists(commupts):
-        arcpy.Merge_management(commupolys, commumerge) #Merge all developed areas across years (i.e. one layer with all separate polygons for all years)
-        arcpy.Merge_management(commu_censopts, commu_censoptsmerge) #Same for census community point locations
-
-        #Subset developed area polygons to onlly keep those that intersect a census community loation
-        arcpy.MakeFeatureLayer_management(commumerge, 'commumerge_lyr')
-        arcpy.SelectLayerByLocation_management('commumerge_lyr',
-                                               overlap_type='INTERSECT',
-                                               select_features=commu_censoptsmerge)
-
-        #Dissolve developed area polygons to have a single layer without edges (removing overlapping poly)
-        arcpy.Dissolve_management(in_features='commumerge_lyr', out_feature_class=commudiss)
-
-        #Subset pixel/fishnet points to keep only those intersecting community developed areas
-        arcpy.MakeFeatureLayer_management(pellepoints, 'pelleptlyr')
-        arcpy.SelectLayerByLocation_management('pelleptlyr',
-                                               overlap_type='INTERSECT',
-                                               select_features=commudiss)
-        arcpy.CopyFeatures_management('pelleptlyr', commupts)
 
     mergetables_rechunk(rootdir=rootdir,
                         in_pointstoprocess=commupts,
