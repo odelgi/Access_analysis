@@ -4,11 +4,10 @@ the social impacts of commodity frontier expansion. This approach is demonstrate
 in Python and implemented for the Department of Pellegrini in the Argentine Gran Chaco.
 
 This repository accompanies the following peer-reviewed publication 
-[del Giorgio O., Messager M. L., le Polain de Waroux Y (year) title. _journal_](link) and
-the accompanying [data repository](url).
+[del Giorgio O., Messager M. L., le Polain de Waroux Y (2021) Fenced off: Measuring growing restrictions on resource access for smallholders in the Argentine Chaco. Applied Geography](https://www.sciencedirect.com/science/article/pii/S0143622821001466).
 
 ## Project description
-[Short abstract-like paragraph]    
+We propose a novel approach to evaluate changes in access to land for smallholders stemming from gradual changes in land control along commodity frontiers. We apply this approach in the Argentine Gran Chaco, a region that has experienced amongst the highest global rates of deforestation for agriculture in recent years. Our findings suggest that access to natural resources for smallholders has been reduced far beyond what would be expected if only looking at deforestation, and that the degree to which access has decreased differs between livelihood activities.    
 [Method diagram]
 
 ## Getting Started
